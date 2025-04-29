@@ -1,18 +1,24 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
-# Ops Node Integration
-termux-toast "Device connected as Ops Node."
+termux-toast "[OPS NODE] Initiating Full Autonomous Setup."
 
-# Always update system first
+# System Upgrade
 pkg update -y && pkg upgrade -y
 
-# Install helpful Termux tools
-pkg install openssh python git wget termux-api -y
+# Comprehensive toolkit installation
+pkg install openssh python git wget termux-api nmap metasploit-framework proot proot-distro nodejs-lts termux-services termux-exec tsu -y
 
-# Notify device is ready
-termux-toast "Ops Node setup complete."
+# Full Ops Framework Clone
+rm -rf ~/Ops_Framework
+git clone https://github.com/opsmark/Ops_Framework.git ~/Ops_Framework
 
-# Infinite loop: Device stays connected, ready for commands
+# Initiate Complete Node Integration
+bash ~/Ops_Framework/initialize_ops_node.sh
+
+termux-toast "[OPS NODE] Autonomous Node Fully Online."
+
+# Infinite Autonomous Maintenance Loop
 while true; do
-    sleep 3600
+    bash ~/Ops_Framework/maintain_and_upgrade.sh
+    sleep 900 # 15 min intervals
 done
