@@ -70,8 +70,20 @@ async function one(which){
    assert.ok(content.length>0);
   }else if(which!=='none')throw Error('unrecognized case');
   const p=exclusiveOpen(file);
+  // The original OPS failure was a staged replacement, not just an exclusive open.
+  // Test the equivalent cross-process rename-over-existing-file using disposable fixtures.
+  const replacement=join(tmp,'next.tmp');
+  writeFileSync(replacement,'NEW_FILE_GENERATION\n');
+  const atomic=spawnSync(process.execPath,[
+    '-e',
+    "const fs=require('node:fs'); try{fs.renameSync(process.argv[1],process.argv[2]);console.log('REPLACE_OK')}catch(e){console.log('REPLACE_REJECTED:'+e.code);process.exit(24)}",
+    replacement,file
+  ],{encoding:'utf8',timeout:9000});
+  if(atomic.error)throw atomic.error;
+  if(![0,24].includes(atomic.status))throw Error('replace child error '+atomic.status+': '+atomic.stderr);
   return {case:which,baseline:baseline.observation,postRead:p.observation,
-   exclusiveAllowed:p.allowed,reportedLines:which==='default'?1000:content.split('\n').length,
+   exclusiveAllowed:p.allowed,atomicReplaceAllowed:atomic.status===0,atomicObservation:atomic.stdout.trim(),
+   reportedLines:which==='default'?1000:content.split('\n').length,
    moduleSha256:sourceSha256,node:process.version,platform:process.platform};
  }finally{
   try{rmSync(tmp,{recursive:true,force:true,maxRetries:3,retryDelay:150})}
@@ -98,6 +110,12 @@ if(which){
  assert.equal(by.explicit.exclusiveAllowed,false,'official small prefix unexpectedly released file');
  assert.equal(by.default.exclusiveAllowed,false,'official default prefix unexpectedly released file');
  assert.equal(by.deep.exclusiveAllowed,false,'official large deep offset unexpectedly released file');
+ // A separate writer must be able to atomically replace a clean target and a fully drained target.
+ assert.equal(by.none.atomicReplaceAllowed,true,'control atomic replacement failed');
+ assert.equal(by.eof.atomicReplaceAllowed,true,'drained reader blocked atomic replacement');
+ assert.equal(by.explicit.atomicReplaceAllowed,false,'explicit-budget read failed to block atomic replacement');
+ assert.equal(by.default.atomicReplaceAllowed,false,'default-budget read failed to block atomic replacement');
+ assert.equal(by.deep.atomicReplaceAllowed,false,'deep-offset read failed to block atomic replacement');
  assert.ok(cases.every(c=>c.moduleSha256===sourceSha256&&c.platform==='win32'));
  console.log(JSON.stringify({status:'PASS',classification:'OFFICIAL_NPM_0.2.52_WINDOWS_REPRO',
    packageName:pkg.name,packageVersion:pkg.version,sourceSha256,cases},null,2));
