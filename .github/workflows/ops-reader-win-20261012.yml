@@ -5,6 +5,8 @@ on:
       - ops-forensics/reader-windows-20261012
     paths:
       - isolated-tests/reader-win-20261012.mjs
+      - isolated-tests/Inspector-Synthetic.ps1
+      - isolated-tests/Test-InspectorSynthetic.ps1
       - .github/workflows/ops-reader-win-20261012.yml
 permissions:
   contents: read
@@ -21,4 +23,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           node --version
           node isolated-tests/reader-win-20261012.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Parse and exercise sanitized inspector on Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -File isolated-tests/Test-InspectorSynthetic.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
