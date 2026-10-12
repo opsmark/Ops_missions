@@ -1,0 +1,37 @@
+name: OPS exact published Desktop Commander Windows reader
+on:
+  push:
+    branches:
+      - ops-forensics/reader-windows-20261012
+    paths:
+      - isolated-tests/reader-official-v0.2.52-win.mjs
+      - .github/workflows/ops-reader-exact-release-win-20261012.yml
+permissions:
+  contents: read
+jobs:
+  published-release-reader:
+    runs-on: windows-2022
+    timeout-minutes: 7
+    steps:
+      - name: Check out exact synthetic test branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Fetch only exact published official npm tarball without scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tgz = (& npm pack '@wonderwhy-er/desktop-commander@0.2.52' --ignore-scripts --silent | Select-Object -Last 1).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tgz)) { throw "Official npm pack unavailable" }
+          tar -xzf $tgz
+          if ($LASTEXITCODE -ne 0) { throw "Official tarball failed extraction" }
+          $pkg = Get-Content 'package/package.json' -Raw | ConvertFrom-Json
+          if ($pkg.name -ne '@wonderwhy-er/desktop-commander' -or $pkg.version -ne '0.2.52') {
+            throw "Package name or version mismatch"
+          }
+          Write-Output ('OFFICIAL_NPM_PACKAGE=' + $pkg.name + '@' + $pkg.version)
+      - name: Exercise exact published reader with isolated Windows fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --version
+          node isolated-tests/reader-official-v0.2.52-win.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
