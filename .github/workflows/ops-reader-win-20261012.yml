@@ -1,0 +1,24 @@
+name: OPS isolated Windows reader lifecycle smoke
+on:
+  push:
+    branches:
+      - ops-forensics/reader-windows-20261012
+    paths:
+      - isolated-tests/reader-win-20261012.mjs
+      - .github/workflows/ops-reader-win-20261012.yml
+permissions:
+  contents: read
+jobs:
+  windows-synthetic-fixture:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact test branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Test synthetic reader mechanism under Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --version
+          node isolated-tests/reader-win-20261012.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
