@@ -50,7 +50,12 @@ $missing = Read-Receipt $env:COMPUTERNAME
 Assert-Yes ($missing.status -eq 'ROOT_UNAVAILABLE') 'missing root status'
 Assert-Yes ($missing.root_exists -eq $false) 'missing root truth'
 Assert-Yes (@($missing.targets | Where-Object {$_.exists}).Count -eq 0) 'missing children'
-$negative = & powershell.exe -NoProfile -NonInteractive -File $targetScript -ExpectedComputerName 'WRONG-HOST-IDENTITY' 2>&1
-Assert-Yes ($LASTEXITCODE -ne 0) 'wrong host accepted'
+$previousPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  $negative = & powershell.exe -NoProfile -NonInteractive -File $targetScript -ExpectedComputerName 'WRONG-HOST-IDENTITY' 2>&1
+  $badExit = $LASTEXITCODE
+} finally { $ErrorActionPreference = $previousPreference }
+Assert-Yes ($badExit -ne 0) 'wrong host accepted'
 Assert-Yes ((($negative | Out-String) -match 'HOST_MISMATCH')) 'wrong host failed without proper classification'
 Write-Output 'WIN_INSPECTOR_SYNTHETIC_PASS: lock, release, root missing, mismatched host, SHA, directory, Windows PowerShell 5.1 parsing'
