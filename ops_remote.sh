@@ -1,10 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -eu
 
-REMOTE_COMMANDS_URL="https://raw.githubusercontent.com/opsmark/Ops_Remote_Commands/main/latest_remote_command.sh"
+cat >&2 <<'EOF'
+OPS_MISSIONS_RETIRED: this historical remote-command poller is disabled.
+It fetched and executed changing remote shell content without a signed task,
+allowlist, replay protection, durable result receipt, or bounded rollback.
+Use the maintained Machine Substrate / OPS-099 control owner instead.
+EOF
 
-termux-toast "[OPS REMOTE] Autonomous Command Center Online."
-
-while true; do
-    curl -fsSL $REMOTE_COMMANDS_URL -o ~/latest_remote_command.sh && chmod +x ~/latest_remote_command.sh && bash ~/latest_remote_command.sh
-    sleep 180 # Check every 3 minutes
-done
+exit 64
