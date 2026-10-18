@@ -1,0 +1,110 @@
+name: Exact manifest function and receipt allowlist
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/manifest-function.yml]
+permissions: {}
+# Only inert, nonprivate function text and synthetic fixture files. No scanner
+# rerun, deployment, device access, secrets, networking or application launch.
+jobs:
+  exact-function:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Test hash-bound original and corrected manifest function
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $Original=@'
+          function Test-HashManifest {
+              param(
+                  [Parameter(Mandatory)][string]$ContentRoot,
+                  [Parameter(Mandatory)][string]$ManifestPath,
+                  [string[]]$AllowedDynamicRelativePaths = @()
+              )
+              $RootFull = [IO.Path]::GetFullPath($ContentRoot).TrimEnd('\\') + '\\'
+              $Listed = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+              $Failures = New-Object 'System.Collections.Generic.List[string]'
+              foreach ($Line in Get-Content -LiteralPath $ManifestPath) {
+                  if ([string]::IsNullOrWhiteSpace($Line)) { continue }
+                  if ($Line -notmatch '^(?<sha>[0-9a-fA-F]{64})\s+\./(?<path>.+)$') {
+                      $Failures.Add("MALFORMED_MANIFEST_LINE $Line")
+                      continue
+                  }
+                  $Relative = $Matches['path'].Replace('/', '\\')
+                  [void]$Listed.Add($Relative)
+                  $Candidate = [IO.Path]::GetFullPath((Join-Path $ContentRoot $Relative))
+                  if (-not $Candidate.StartsWith($RootFull, [StringComparison]::OrdinalIgnoreCase)) {
+                      $Failures.Add("PATH_ESCAPE $Relative")
+                      continue
+                  }
+                  if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
+                      $Failures.Add("MISSING $Relative")
+                      continue
+                  }
+                  $Actual = Get-Sha256 $Candidate
+                  if ($Actual -ne $Matches['sha'].ToLowerInvariant()) {
+                      $Failures.Add("HASH $Relative expected=$($Matches['sha']) actual=$Actual")
+                  }
+              }
+              $ManifestRelative = [IO.Path]::GetFullPath($ManifestPath).Substring($RootFull.Length)
+              foreach ($File in Get-ChildItem -LiteralPath $ContentRoot -File -Recurse -Force) {
+                  $Relative = $File.FullName.Substring($RootFull.Length)
+                  if ($Relative -eq $ManifestRelative) { continue }
+                  $Allowed = $false
+                  foreach ($Pattern in $AllowedDynamicRelativePaths) {
+                      if ($Relative -like $Pattern) { $Allowed = $true; break }
+                  }
+                  if (-not $Allowed -and -not $Listed.Contains($Relative)) {
+                      $Failures.Add("UNLISTED $Relative")
+                  }
+              }
+              if ($Failures.Count -gt 0) { throw ($Failures -join [Environment]::NewLine) }
+              return $Listed.Count
+          }
+          '@
+          $Original=$Original.Replace("`r`n","`n").TrimEnd([char[]]"`r`n")+"`n"
+          $Candidate=$Original.Replace(".TrimEnd('\\') + '\\'",'.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar').Replace(".Replace('/', '\\')",".Replace('/', [IO.Path]::DirectorySeparatorChar)")
+          function TextSha([string]$Text){$h=[Security.Cryptography.SHA256]::Create();try{return [BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}}
+          $OldSha=TextSha $Original; $NewSha=TextSha $Candidate
+          if($OldSha -ne '915294fc27bdddf39be0132ae9180562179211bf062172028ff10fae88493142'){throw "Original source mismatch $OldSha"}
+          if($NewSha -ne '37012742dd25dd5cd7c9706a7a00755a762ee82b341e3ad8bc2d21bf9632d44d'){throw "Candidate source mismatch $NewSha"}
+          foreach($Source in @($Original,$Candidate)){$Tokens=$null;$Errors=$null;$null=[Management.Automation.Language.Parser]::ParseInput($Source,[ref]$Tokens,[ref]$Errors);if($Errors.Count -gt 0){throw 'Parser rejected function source'}}
+          function Get-Sha256([string]$Path){return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()}
+          $Results=New-Object 'System.Collections.Generic.List[object]'
+          $WorkRoot=Join-Path ([IO.Path]::GetTempPath()) ('manifest-function-fixtures-'+[guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $WorkRoot|Out-Null
+          function RunCase {
+              param([string]$Name,[bool]$ExpectSuccess,[string]$ErrorPattern,[scriptblock]$Setup,[string[]]$Allowed=@(),[switch]$Old)
+              $Dir=Join-Path $WorkRoot $Name;New-Item -ItemType Directory -Path $Dir|Out-Null
+              $Data=Join-Path $Dir 'file.txt';$Man=Join-Path $Dir 'manifest.sha256'
+              [IO.File]::WriteAllText($Data,'synthetic bytes only')
+              [IO.File]::WriteAllText($Man,((Get-Sha256 $Data)+'  ./file.txt'+"`n"))
+              if($Setup){& $Setup $Dir $Man $Data|Out-Null}
+              $Succeeded=$false;$ErrorText='';$Count=$null
+              try {
+                  if($Old){. ([scriptblock]::Create($Original))}else{. ([scriptblock]::Create($Candidate))}
+                  $Count=Test-HashManifest -ContentRoot $Dir -ManifestPath $Man -AllowedDynamicRelativePaths $Allowed
+                  $Succeeded=$true
+              }catch{$ErrorText=$_.Exception.Message}
+              $Passed=if($ExpectSuccess){$Succeeded -and $Count -eq 1}else{(-not $Succeeded) -and $ErrorText -like $ErrorPattern}
+              $Results.Add([pscustomobject]@{name=$Name;passed=$Passed;actual_success=$Succeeded;returned_count=$Count;error=$ErrorText})
+              if(-not $Passed){throw "Fixture failed: $Name, error=$ErrorText, count=$Count"}
+          }
+          try {
+              RunCase -Name 'old-valid-file-rejected' -ExpectSuccess $false -ErrorPattern '*PATH_ESCAPE*' -Old
+              RunCase -Name 'candidate-valid-file' -ExpectSuccess $true
+              RunCase -Name 'candidate-changed-bytes' -ExpectSuccess $false -ErrorPattern '*HASH*' -Setup {param($d,$m,$f);[IO.File]::WriteAllText($f,'changed bytes')}
+              RunCase -Name 'candidate-missing-file' -ExpectSuccess $false -ErrorPattern '*MISSING*' -Setup {param($d,$m,$f);Remove-Item -LiteralPath $f}
+              RunCase -Name 'candidate-unlisted-file' -ExpectSuccess $false -ErrorPattern '*UNLISTED*' -Setup {param($d,$m,$f);[IO.File]::WriteAllText((Join-Path $d 'extra.txt'),'unexpected')}
+              RunCase -Name 'candidate-malformed-line' -ExpectSuccess $false -ErrorPattern '*MALFORMED_MANIFEST_LINE*' -Setup {param($d,$m,$f);[IO.File]::WriteAllText($m,'not a hash line')}
+              RunCase -Name 'candidate-parent-traversal' -ExpectSuccess $false -ErrorPattern '*PATH_ESCAPE*' -Setup {param($d,$m,$f);[IO.File]::AppendAllText($m,(('0'*64)+'  ./../outside.txt'+"`n"))}
+              $AddReceipt={param($d,$m,$f);$r=Join-Path $d 'receipts';New-Item -ItemType Directory -Path $r|Out-Null;[IO.File]::WriteAllText((Join-Path $r 'preflight-SYNTHETIC.json'),'{}')}
+              RunCase -Name 'old-doubled-receipt-mask-rejected' -ExpectSuccess $false -ErrorPattern '*UNLISTED receipts*' -Setup $AddReceipt -Allowed @('receipts\\preflight-*.json')
+              RunCase -Name 'single-receipt-mask-accepted' -ExpectSuccess $true -Setup $AddReceipt -Allowed @('receipts\preflight-*.json')
+              RunCase -Name 'other-receipt-file-refused' -ExpectSuccess $false -ErrorPattern '*UNLISTED*' -Allowed @('receipts\preflight-*.json') -Setup {param($d,$m,$f);$r=Join-Path $d 'receipts';New-Item -ItemType Directory -Path $r|Out-Null;[IO.File]::WriteAllText((Join-Path $r 'unexpected.json'),'{}')}
+              $Report=[ordered]@{schema='exact-manifest-function-fixtures/1';utc=[DateTime]::UtcNow.ToString('o');powershell=$PSVersionTable.PSVersion.ToString();original_function_sha256=$OldSha;candidate_function_sha256=$NewSha;passed=$Results.Count;cases=$Results;scope='Exact hash-bound function only, synthetic files; not complete package, reparse-point resistance, malware or native installation approval'}
+              Write-Output 'BEGIN_EXACT_MANIFEST_RESULT';$Report|ConvertTo-Json -Depth 8;Write-Output 'END_EXACT_MANIFEST_RESULT'
+          } finally {Remove-Item -LiteralPath $WorkRoot -Recurse -Force}
+          if(Test-Path -LiteralPath $WorkRoot){throw 'Fixture cleanup failed'}
+          Write-Output 'OWNED_FIXTURE_CLEANUP_VERIFIED'
