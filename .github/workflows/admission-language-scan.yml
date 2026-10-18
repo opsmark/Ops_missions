@@ -1,0 +1,161 @@
+name: Admission language regression and pinned PE scan
+
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/admission-language-scan.yml]
+
+permissions: {}
+concurrency:
+  group: admission-language-scan-20261018
+  cancel-in-progress: false
+
+# Standard hosted runners only. No repository checkout, secrets, model API,
+# device connection, deployed code, scheduled trigger or binary execution.
+# Public synthetic microtests are NOT full installer/target-machine acceptance.
+jobs:
+  powershell-language:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Execute Windows PowerShell 5.1 language and fail-closed microtests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Results = New-Object 'System.Collections.Generic.List[object]'
+          function Check([string]$Name, [bool]$Passed, [string]$Detail) {
+              $Results.Add([pscustomobject]@{name=$Name;passed=$Passed;detail=$Detail})
+              if (-not $Passed) { throw "ASSERTION_FAILED: $Name : $Detail" }
+          }
+          $Root = Join-Path ([IO.Path]::GetTempPath()) ('admission-fixture-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $Root | Out-Null
+          try {
+              $Nested = Join-Path $Root 'sub'
+              New-Item -ItemType Directory -Path $Nested | Out-Null
+              [IO.File]::WriteAllText((Join-Path $Nested 'sample.txt'), 'synthetic file only')
+              # Exact expressions from the reviewed old and proposed path checks.
+              $OldRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\\') + '\\'
+              $NewRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+              $OldRelative = 'sub/sample.txt'.Replace('/', '\\')
+              $NewRelative = 'sub/sample.txt'.Replace('/', [IO.Path]::DirectorySeparatorChar)
+              $OldCandidate = [IO.Path]::GetFullPath((Join-Path $Root $OldRelative))
+              $NewCandidate = [IO.Path]::GetFullPath((Join-Path $Root $NewRelative))
+              Check 'old-double-separator-rejects-valid-file' (-not $OldCandidate.StartsWith($OldRoot,[StringComparison]::OrdinalIgnoreCase)) 'Reproduces the reported valid-path rejection in real Windows PowerShell/.NET.'
+              Check 'corrected-separator-accepts-valid-file' ($NewCandidate.StartsWith($NewRoot,[StringComparison]::OrdinalIgnoreCase)) 'Same fixture with the proposed separator expression.'
+              $Escape = [IO.Path]::GetFullPath((Join-Path $Root '../outside.txt'))
+              Check 'corrected-separator-rejects-parent-escape' (-not $Escape.StartsWith($NewRoot,[StringComparison]::OrdinalIgnoreCase)) 'Lexical parent traversal rejected; no outside file read.'
+              $Sibling = [IO.Path]::GetFullPath($Root + '-sibling/outside.txt')
+              Check 'corrected-separator-rejects-prefix-sibling' (-not $Sibling.StartsWith($NewRoot,[StringComparison]::OrdinalIgnoreCase)) 'Same-name prefix cannot pass containment.'
+              Check 'normalized-relative-path-is-single-separator' ($NewRelative -eq ('sub' + [IO.Path]::DirectorySeparatorChar + 'sample.txt')) 'No doubled literal separator.'
+              $PidResult = & {
+                  try { $pid = $null; return @{rejected=$false;error_id='NONE'} }
+                  catch { return @{rejected=$true;error_id=$_.FullyQualifiedErrorId} }
+              }
+              Check 'old-pid-assignment-rejected' ($PidResult.rejected -and $PidResult.error_id -like '*VariableNotWritable*') $PidResult.error_id
+              $BeforePid = $PID
+              $Renamed = & { $RustDeskProcessId=$null; $RustDeskProcessId=42; return $RustDeskProcessId }
+              Check 'renamed-process-id-assigns' ($Renamed -eq 42) 'Synthetic integer, no process launched.'
+              Check 'automatic-pid-unchanged' ($PID -eq $BeforePid) 'PowerShell host PID preserved.'
+              $Required = @('Get-MpComputerStatus','Start-MpScan','Get-MpThreat','Get-MpThreatDetection')
+              # Isolated mock command discovery; does not call or change Defender.
+              $Gate = {
+                  param([string[]]$Available)
+                  function Get-Command { param([string]$Name,[object]$ErrorAction); if($Available -contains $Name){return [pscustomobject]@{Name=$Name}} }
+                  foreach ($RequiredCommand in @('Get-MpComputerStatus','Start-MpScan','Get-MpThreat','Get-MpThreatDetection')) {
+                      if (-not (Get-Command $RequiredCommand -ErrorAction SilentlyContinue)) { throw "Required Microsoft Defender command unavailable: $RequiredCommand" }
+                  }
+                  return $true
+              }
+              Check 'four-required-commands-accepted-in-mock' ([bool](& $Gate -Available $Required)) 'Mock only, not antivirus execution.'
+              foreach($Missing in $Required){
+                  $Rejected=$false
+                  try { $null=& $Gate -Available @($Required | Where-Object {$_ -ne $Missing}) }
+                  catch { $Rejected=$_.Exception.Message -like "*$Missing*" }
+                  Check ('missing-command-rejected-' + $Missing) $Rejected 'Unavailable evidence is not zero detections.'
+              }
+              $Legacy = & {
+                  function Get-Command { param([string]$Name,[object]$ErrorAction); return $null }
+                  $active=@(); if(Get-Command Get-MpThreat -ErrorAction SilentlyContinue){throw 'Must not execute in fixture'}
+                  $matching=@(); if(Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue){throw 'Must not execute in fixture'}
+                  return ($active.Count -eq 0 -and $matching.Count -eq 0)
+              }
+              Check 'old-optional-threat-queries-look-empty' ([bool]$Legacy) 'Reproduces misleading zero-count behavior when queries are unavailable.'
+              $TimestampGate = {
+                  param($Stamp)
+                  if (-not $Stamp) { throw 'Defender signature timestamp unavailable.' }
+                  $SignatureAgeHours = ((Get-Date) - [datetime]$Stamp).TotalHours
+                  if ($SignatureAgeHours -lt 0 -or $SignatureAgeHours -gt 168) { throw 'Defender signatures are stale or future-dated.' }
+                  return $true
+              }
+              foreach($Case in @(@{name='missing';stamp=$null},@{name='future';stamp=(Get-Date).AddDays(1)},@{name='stale';stamp=(Get-Date).AddDays(-8)})){
+                  $Rejected=$false; try{$null=& $TimestampGate -Stamp $Case.stamp}catch{$Rejected=$true}
+                  Check ('signature-' + $Case.name + '-rejected') $Rejected 'Synthetic timestamp check; existing 168-hour bound is tested, not endorsed.'
+              }
+              Check 'recent-signature-timestamp-accepted' ([bool](& $TimestampGate -Stamp (Get-Date).AddHours(-1))) 'Synthetic timestamp only.'
+              $ProtectionGate={param($Status); if(-not $Status.AntivirusEnabled -or -not $Status.RealTimeProtectionEnabled){throw 'Defender protection is not enabled after the scan.'}; return $true}
+              foreach($Status in @(@{AntivirusEnabled=$false;RealTimeProtectionEnabled=$true},@{AntivirusEnabled=$true;RealTimeProtectionEnabled=$false})){
+                  $Rejected=$false;try{$null=& $ProtectionGate -Status $Status}catch{$Rejected=$true}
+                  Check ('disabled-protection-rejected-' + $Results.Count) $Rejected 'Mocked post-scan state, no setting changed.'
+              }
+              $Report=[ordered]@{schema='admission-language-microtests/1';utc=[DateTime]::UtcNow.ToString('o');powershell=$PSVersionTable.PSVersion.ToString();os=[Environment]::OSVersion.VersionString;passed=$Results.Count;cases=$Results;scope='Windows hosted synthetic microtests; no full helper invocation, target Defender scan, installer, machine or live task admission'}
+              Write-Output 'BEGIN_ADMISSION_MICROTEST_RESULT'
+              $Report|ConvertTo-Json -Depth 8
+              Write-Output 'END_ADMISSION_MICROTEST_RESULT'
+          }
+          finally { Remove-Item -LiteralPath $Root -Recurse -Force }
+          Check 'owned-fixture-removed' (-not (Test-Path -LiteralPath $Root)) 'Cleanup independently read back.'
+          Write-Output ('FINAL_PASS_COUNT=' + $Results.Count)
+
+  public-binary-antivirus:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Scan exact public Windows artifacts without executing them
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          chmod 755 "$work"
+          mkdir -p "$work/targets" "$work/db"
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+          base='https://github.com/mrpulor-gh/nuphus-mcp/releases/download/v0.3.3'
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --connect-timeout 15 --max-time 120 --retry 0 "$base/nuphus-mcp-win32-arm64" -o "$work/targets/nuphus-arm64.exe"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --connect-timeout 15 --max-time 120 --retry 0 "$base/nuphus-mcp-win32-x64" -o "$work/targets/nuphus-x64.exe"
+          printf '%s  %s\n' '40f991695f109e331f99d64763c60d82478c73a50007c4a65dc597067e2605e5' "$work/targets/nuphus-arm64.exe" '5dc81d7573edb07f9048f2068c4316827d847693ea0daac1fb3fa48c82b4504d' "$work/targets/nuphus-x64.exe" | sha256sum --check --strict
+          test "$(stat -c %s "$work/targets/nuphus-arm64.exe")" = 13707776
+          test "$(stat -c %s "$work/targets/nuphus-x64.exe")" = 16768512
+          chmod 444 "$work/targets/"*.exe
+          if ! command -v clamscan >/dev/null || ! command -v freshclam >/dev/null; then
+            sudo apt-get -o Acquire::Retries=0 -o APT::Update::Error-Mode=any update
+            sudo apt-get install --no-install-recommends -y clamav clamav-freshclam
+            # Only the scanner service just installed on this disposable runner.
+            if systemctl is-active --quiet clamav-freshclam; then sudo systemctl stop clamav-freshclam; fi
+          fi
+          dpkg-query -W -f='${Package} ${Version}\n' clamav clamav-freshclam
+          sha256sum "$(command -v clamscan)" "$(command -v freshclam)"
+          printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\nMaxAttempts 1\nConnectTimeout 15\nReceiveTimeout 90\n' "$work/db" > "$work/freshclam.conf"
+          timeout 300 freshclam --config-file="$work/freshclam.conf" --stdout
+          clamscan --version
+          for db in "$work/db/"*.cvd "$work/db/"*.cld; do
+            if test -f "$db"; then sigtool --info "$db"; sha256sum "$db"; fi
+          done
+          # Benign standard AV positive-control file; no malware execution.
+          python3 - "$work/control.txt" <<'PY'
+          import pathlib,sys
+          pathlib.Path(sys.argv[1]).write_bytes(b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*')
+          PY
+          set +e
+          clamscan --database="$work/db" --official-db-only=yes "$work/control.txt" > "$work/control-result.txt" 2>&1
+          control_rc=$?
+          set -e
+          cat "$work/control-result.txt"
+          test "$control_rc" = 1
+          grep -qi 'Eicar.*FOUND' "$work/control-result.txt"
+          rm -- "$work/control.txt"
+          clamscan --database="$work/db" --official-db-only=yes --alert-exceeds-max=yes --max-filesize=100M --max-scansize=400M --max-scantime=120000 --recursive "$work/targets"
+          sha256sum "$work/targets/"*.exe
+          echo 'PUBLIC_PINNED_BINARY_SCAN_COMPLETED_NO_DETECTIONS'
+          echo 'Scope: exact two public PE files, ClamAV signatures available in this run; not malware-free certification or Windows target admission.'
