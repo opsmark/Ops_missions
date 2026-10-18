@@ -6,6 +6,7 @@ on:
 permissions: {}
 # Data-only receiving on a standard hosted VM. No checkout, installed packages,
 # secrets, model call, scheduling, artifact/cache upload or private/native inputs.
+# A refused HTML redirect does not prevent inspection of the distinct linked ZIP.
 jobs:
   existing-handoff:
     if: github.repository == 'opsmark/Ops_missions'
@@ -22,11 +23,14 @@ jobs:
           origin='https://ops-workflow-cost-calculator.rass991.chatgpt.site'
           base=origin+'/assets/research-brief-example/'
           allowed={base+'index.html',base+'research-brief-example.zip'}
-          report={'schema':'ops099.public-research-handoff-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'status':'NOT_COMPLETED','reads':[],'limits':['Public artifact readback, not client work, source-fact verification, native delivery, PDF visual review or malware-free certification.','No ZIP member is extracted or executed. Browser read/click acceptance remains in the distinct prior workflow.'],'errors':[]}
+          report={'schema':'ops099.public-research-handoff-receiving/2','started_utc':datetime.now(timezone.utc).isoformat(),'status':'NOT_COMPLETED','reads':[],'redirects':[],'limits':['Public artifact readback, not client work, source-fact verification, native delivery, PDF visual review or malware-free certification.','No ZIP member is extracted or executed. Browser read/click acceptance remains in the distinct prior workflow.'],'errors':[]}
           class Redirects(urllib.request.HTTPRedirectHandler):
               def redirect_request(self,req,fp,code,msg,headers,newurl):
                   resolved=urllib.parse.urljoin(req.full_url,newurl)
-                  if resolved not in allowed: raise RuntimeError('Redirect outside exact public-artifact allowlist')
+                  u=urllib.parse.urlsplit(resolved)
+                  same_origin=(u.scheme+'://'+u.netloc)==origin
+                  report['redirects'].append({'from':req.full_url,'http_status':code,'same_origin':same_origin,'location_without_query_or_fragment':u.scheme+'://'+u.netloc+u.path if same_origin else 'OTHER_ORIGIN_NOT_FOLLOWED','followed':resolved in allowed})
+                  if resolved not in allowed: raise RuntimeError('Redirect outside exact public-artifact allowlist; not followed')
                   return super().redirect_request(req,fp,code,msg,headers,resolved)
           opener=urllib.request.build_opener(Redirects)
           def receive(url,cap):
@@ -53,10 +57,14 @@ jobs:
               def handle_data(self,data):
                   if self.in_title:self.title.append(data)
                   if self.in_body and data.strip():self.text.append(data.strip())
+          html=None
           try:
-              html=receive(base+'index.html',300000)
-              page=InspectHTML();page.feed(html.decode('utf-8-sig'))
-              report['public_reader']={'title':''.join(page.title),'tbody_data_rows':page.rows,'links':page.links,'scripts_not_executed':page.scripts,'text_excerpt':'\n'.join(page.text)[:2500]}
+              try:
+                  html=receive(base+'index.html',300000)
+                  page=InspectHTML();page.feed(html.decode('utf-8-sig'))
+                  report['public_reader']={'title':''.join(page.title),'tbody_data_rows':page.rows,'links':page.links,'scripts_not_executed':page.scripts,'text_excerpt':'\n'.join(page.text)[:2500]}
+              except Exception as e:
+                  report['public_reader']={'status':'NOT_RECEIVED','reason':str(e),'redirect_policy_unchanged':True}
               blob=receive(base+'research-brief-example.zip',2000000)
               with zipfile.ZipFile(io.BytesIO(blob)) as z:
                   infos=z.infolist()
@@ -89,13 +97,17 @@ jobs:
                       urls_by_row.append(urls)
                   all_urls=[u for row in urls_by_row for u in row]
                   hosts=sorted({urllib.parse.urlsplit(u).hostname for u in all_urls})
-                  report['research_rows']={'file':csv_names[0],'columns':columns,'data_rows':len(rows),'url_columns':url_columns,'each_row_has_source_url':all(urls_by_row),'source_hosts':hosts,'csv_rectangular':all(None not in row and all(v is not None for v in row.values()) for row in rows)}
+                  rectangular=all(None not in row and all(v is not None for v in row.values()) for row in rows)
+                  report['research_rows']={'file':csv_names[0],'columns':columns,'data_rows':len(rows),'url_columns':url_columns,'each_row_has_source_url':all(urls_by_row),'source_hosts':hosts,'csv_rectangular':rectangular}
                   readers=[i for i in files if PurePosixPath(i['name']).suffix.lower() in {'.html','.htm'}]
-                  report['offline_readers']=[{'name':i['name'],'matches_public_html_bytes':i['sha256']==hashlib.sha256(html).hexdigest()} for i in readers]
-                  if len(rows)!=6 or not all(urls_by_row) or not readers or not any(i.get('pdf_header_only') for i in files):raise RuntimeError('Announced six-row CSV/PDF/reader package not established')
-                  report['status']='EXISTING_PUBLIC_RESEARCH_HANDOFF_RECEIVED'
+                  report['offline_readers']=[]
+                  for i in readers:
+                      parsed=InspectHTML();parsed.feed(z.read(i['name']).decode('utf-8-sig'))
+                      report['offline_readers'].append({'name':i['name'],'title':''.join(parsed.title),'tbody_data_rows':parsed.rows,'scripts_not_executed':parsed.scripts,'matches_public_html_bytes':i['sha256']==hashlib.sha256(html).hexdigest() if html is not None else None})
+                  if len(rows)!=6 or not all(urls_by_row) or not rectangular or not readers or not any(i.get('pdf_header_only') for i in files):raise RuntimeError('Announced six-row CSV/PDF/reader package not established')
+                  report['status']='EXISTING_PUBLIC_RESEARCH_ZIP_RECEIVED'
           except Exception as e:
-              report['status']='BLOCKED_OR_MISMATCH';report['errors'].append(str(e));sys.exitcode=1
+              report['status']='BLOCKED_OR_MISMATCH';report['errors'].append(str(e))
           finally:
               report['finished_utc']=datetime.now(timezone.utc).isoformat()
               print('BEGIN_PUBLIC_HANDOFF_RESULT');print(json.dumps(report,indent=2));print('END_PUBLIC_HANDOFF_RESULT')
