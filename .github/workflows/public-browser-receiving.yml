@@ -1,0 +1,124 @@
+name: Public browser receiving check
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/public-browser-receiving.yml]
+permissions: {}
+# Separate disposable standard VM. No checkout, install, secret, cache, artifact,
+# model call, self-hosted runner, scheduler, fleet endpoint or public debug port.
+# This is anonymous public-site testing, NOT native PC or signed-in control.
+jobs:
+  public-browser:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Inspect installed browser and check public agency privacy navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" != 0
+          command -v node
+          test -x /opt/google/chrome/chrome
+          dpkg-query -W -f='${Package} ${Version}\n' google-chrome-stable
+          dpkg -V google-chrome-stable
+          sha256sum /opt/google/chrome/chrome
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          cat > "$work/check.mjs" <<'JS'
+          import {spawn} from 'node:child_process';
+          import {mkdtempSync,mkdirSync,rmSync,existsSync} from 'node:fs';
+          import {tmpdir} from 'node:os';
+          import {join} from 'node:path';
+          import {createHash} from 'node:crypto';
+          import {setTimeout as delay} from 'node:timers/promises';
+          const origin='https://ops-workflow-cost-calculator.rass991.chatgpt.site';
+          const target=origin+'/agency-overflow';
+          const root=mkdtempSync(join(tmpdir(),'ops-public-browser-'));
+          const home=join(root,'home');mkdirSync(home);
+          const report={schema:'ops099.public-browser-receiving/1',started_utc:new Date().toISOString(),status:'NOT_COMPLETED',target,scope:'Anonymous public website only; no native PC, signed-in profile, form submission, payment, contact or model call.',requests:[],errors:[]};
+          const args=['--headless=new','--remote-debugging-pipe','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-default-apps','--disable-sync','--disable-extensions','--window-size=1100,800',`--user-data-dir=${join(root,'profile')}`,'about:blank'];
+          if(process.getuid()===0)throw new Error('Refusing root browser');
+          const browser=spawn('/opt/google/chrome/chrome',args,{detached:true,stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:home,TMPDIR:root,LANG:'C.UTF-8'}});
+          let stderr='',buffer=Buffer.alloc(0),sequence=0,closed=false,fatal=null;
+          const pending=new Map();const handlers=[];
+          browser.stderr.on('data',b=>{stderr=(stderr+b.toString()).slice(-6000);});
+          browser.on('error',e=>{fatal=e;});
+          browser.on('exit',()=>{closed=true;for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Browser exited'));}pending.clear();});
+          function send(method,params={},sessionId){
+            if(fatal)return Promise.reject(fatal);
+            if(closed)return Promise.reject(new Error('Browser is closed'));
+            const id=++sequence;
+            return new Promise((resolve,reject)=>{
+              const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout: '+method));},12000);
+              pending.set(id,{resolve,reject,timer});
+              browser.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0',e=>{if(e){clearTimeout(timer);pending.delete(id);reject(e);}});
+            });
+          }
+          browser.stdio[4].on('data',chunk=>{
+            buffer=Buffer.concat([buffer,chunk]);
+            if(buffer.length>4*1024*1024){fatal=new Error('CDP output bound');browser.kill('SIGTERM');return;}
+            let end;
+            while((end=buffer.indexOf(0))>=0){
+              const bytes=buffer.subarray(0,end);buffer=buffer.subarray(end+1);if(!bytes.length)continue;
+              let event;try{event=JSON.parse(bytes.toString());}catch{fatal=new Error('Invalid CDP response');continue;}
+              if(event.id&&pending.has(event.id)){const p=pending.get(event.id);pending.delete(event.id);clearTimeout(p.timer);event.error?p.reject(new Error(event.error.message)):p.resolve(event.result);}
+              else for(const h of handlers)Promise.resolve(h(event)).catch(e=>{fatal=e;});
+            }
+          });
+          let session;
+          async function value(expression){const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session);if(r.exceptionDetails)throw new Error('Page evaluation failed');return r.result.value;}
+          async function ready(){for(let i=0;i<50;i++){if(fatal)throw fatal;try{if(await value('document.readyState === "complete" && !!document.body'))return;}catch(e){if(closed)throw e;}await delay(100);}throw new Error('Page readiness timeout');}
+          async function inspect(){return value('({url:location.href,title:document.title,text:document.body.innerText.slice(0,7000),links:Array.from(document.querySelectorAll("a[href]")).slice(0,80).map(a=>({text:a.innerText.trim().slice(0,160),href:a.href,target:a.target}))})');}
+          try{
+            report.browser=await send('Browser.getVersion');
+            const t=await send('Target.createTarget',{url:'about:blank'});
+            session=(await send('Target.attachToTarget',{targetId:t.targetId,flatten:true})).sessionId;
+            await send('Page.enable',{},session);await send('Runtime.enable',{},session);
+            const sandboxNavigation=await send('Page.navigate',{url:'chrome://sandbox'},session);
+            if(sandboxNavigation.errorText)throw new Error('Sandbox status navigation: '+sandboxNavigation.errorText);
+            await ready();report.sandbox_text=await value('document.body.innerText');
+            if(!/adequately sandboxed/i.test(report.sandbox_text)||!/Seccomp-BPF sandbox\s+Yes/i.test(report.sandbox_text))throw new Error('Sandbox could not be positively verified; no public navigation');
+            report.sandbox_verified=true;
+            let requests=0;
+            handlers.push(async e=>{
+              if(e.sessionId!==session||e.method!=='Fetch.requestPaused')return;
+              const p=e.params;requests++;let u;try{u=new URL(p.request.url);}catch{}
+              const allowed=requests<=150&&u&&u.origin===origin&&['GET','HEAD'].includes(p.request.method)&&!/(?:checkout|payment|purchase|login|signin|oauth|logout|delete)/i.test(u.pathname);
+              if(report.requests.length<150)report.requests.push({method:p.request.method,url:u?u.origin+u.pathname:'INVALID',allowed:!!allowed});
+              await send(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:p.requestId}:{requestId:p.requestId,errorReason:'BlockedByClient'},session);
+            });
+            await send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},session);
+            const nav=await send('Page.navigate',{url:target},session);
+            if(nav.errorText)throw new Error('Public navigation: '+nav.errorText);
+            await ready();await delay(300);
+            report.agency=await inspect();
+            if(!report.agency.url.startsWith(origin+'/agency-overflow')||report.agency.text.length<150||/ERR_BLOCKED_BY_ADMINISTRATOR|verify you are human|captcha|access denied/i.test(report.agency.text))throw new Error('Public page unavailable or challenge; no workaround');
+            report.agency_research_mentions=report.agency.text.split('\n').filter(s=>/research|\$79|sample|example|source/i.test(s)).slice(0,30);
+            const privacy=report.agency.links.find(a=>a.href.startsWith(origin+'/')&&/privacy/i.test(a.text+' '+a.href)&&(!a.target||a.target==='_self'));
+            if(!privacy){report.status='PUBLIC_PAGE_READ_PRIVACY_LINK_NOT_FOUND';throw new Error('No ordinary same-tab same-origin privacy link found');}
+            report.selected_privacy_link=privacy;
+            const clicked=await value(`(()=>{const a=Array.from(document.querySelectorAll('a[href]')).find(x=>x.href===${JSON.stringify(privacy.href)});if(!a)return false;a.click();return true})()`);
+            if(!clicked)throw new Error('Link disappeared before click');
+            for(let i=0;i<50;i++){await delay(100);try{if((await value('location.href')).includes('/privacy'))break;}catch{}}
+            await ready();report.privacy=await inspect();
+            if(!report.privacy.url.startsWith(origin+'/')||!/privacy/i.test(report.privacy.url)||!/privacy/i.test(report.privacy.text)||report.privacy.text.length<100)throw new Error('Privacy destination not verified');
+            const shot=await send('Page.captureScreenshot',{format:'jpeg',quality:30,captureBeyondViewport:false},session);
+            const image=Buffer.from(shot.data,'base64');report.privacy_screenshot={bytes:image.length,sha256:createHash('sha256').update(image).digest('hex'),pixels_not_returned:true,visual_review:'NOT_PERFORMED'};
+            report.status='PUBLIC_BROWSER_READ_CLICK_READBACK_PASS';
+          }catch(e){report.errors.push(e.message);if(report.status==='NOT_COMPLETED')report.status='BLOCKED';process.exitCode=1;}
+          finally{
+            try{if(!closed)await send('Browser.close');}catch{}
+            for(let i=0;i<30&&!closed;i++)await delay(100);
+            const groupAlive=()=>{try{process.kill(-browser.pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
+            if(Number.isInteger(browser.pid)&&browser.pid>1&&groupAlive()){process.kill(-browser.pid,'SIGTERM');for(let i=0;i<30&&groupAlive();i++)await delay(100);}
+            const gone=Number.isInteger(browser.pid)&&browser.pid>1&&!groupAlive();
+            report.owned_process_group_gone=gone;
+            if(gone){rmSync(root,{recursive:true,force:true});report.owned_profile_removed=!existsSync(root);}else{report.errors.push('Owned browser group cleanup unverified');process.exitCode=1;}
+            if(report.status!=='PUBLIC_BROWSER_READ_CLICK_READBACK_PASS')report.browser_stderr_tail=stderr;
+            report.finished_utc=new Date().toISOString();
+            console.log('BEGIN_PUBLIC_BROWSER_RESULT');console.log(JSON.stringify(report,null,2));console.log('END_PUBLIC_BROWSER_RESULT');
+          }
+          JS
+          node --check "$work/check.mjs"
+          timeout --signal=TERM --kill-after=5 110 node "$work/check.mjs"
