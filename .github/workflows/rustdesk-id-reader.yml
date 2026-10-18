@@ -1,0 +1,224 @@
+name: RustDesk identity reader qualification
+
+on:
+  push:
+    branches: [ops-forensics/rustdesk-id-reader-20261018]
+    paths:
+      - tools/rustdesk-id/**
+      - .github/workflows/rustdesk-id-reader.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustdesk-id-reader-20261018
+  cancel-in-progress: false
+
+jobs:
+  synthetic-windows-contract:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run PowerShell 5.1 positive and fail-closed tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tools\rustdesk-id\Read-OPS-RustDeskIdentity.ps1'
+          [void][ScriptBlock]::Create([IO.File]::ReadAllText($script))
+
+          $root = Join-Path ([IO.Path]::GetTempPath()) ('rustdesk-id-reader-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $results = New-Object 'System.Collections.Generic.List[object]'
+          function Check([string]$Name, [bool]$Passed, [string]$Detail) {
+            $results.Add([pscustomobject]@{ name=$Name; passed=$Passed; detail=$Detail })
+            if (-not $Passed) { throw "ASSERTION_FAILED: $Name : $Detail" }
+          }
+          function Compile-X64([string]$Directory, [string]$Body) {
+            New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+            $source = Join-Path $Directory 'Program.cs'
+            $exe = Join-Path $Directory 'rustdesk-1.5.0-x86_64.exe'
+            [IO.File]::WriteAllText($source, $Body)
+            $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+            & $csc /nologo /target:exe /platform:x64 "/out:$exe" $source
+            if ($LASTEXITCODE -ne 0) { throw "csc failed with $LASTEXITCODE" }
+            return $exe
+          }
+          function Identity-Args([string]$Exe, [string]$ReceiptDirectory) {
+            $file = Get-Item -LiteralPath $Exe
+            $sha = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            return @{
+              RustDeskPath = $Exe
+              ExpectedSha256 = $sha
+              ExpectedBytes = [long]$file.Length
+              ExpectedArchitecture = 'X64'
+              ReceiptDirectory = $ReceiptDirectory
+              TimeoutSeconds = 5
+              RedactId = $true
+              AllowElevatedHostedValidation = $true
+            }
+          }
+
+          try {
+            $goodBody = @'
+          using System;
+          using System.Threading;
+          public static class Program {
+            public static int Main(string[] args) {
+              if (args.Length == 1 && args[0] == "--get-id") { Console.WriteLine("123456789"); return 0; }
+              if (args.Length == 1 && args[0] == "--hold") { Thread.Sleep(30000); return 0; }
+              return 2;
+            }
+          }
+          '@
+            $goodDir = Join-Path $root 'good'
+            $goodExe = Compile-X64 $goodDir $goodBody
+            $receiptDir = Join-Path $root 'receipts-good'
+            $held = Start-Process -FilePath $goodExe -ArgumentList '--hold' -PassThru
+            Start-Sleep -Milliseconds 300
+            $invokeArgs = Identity-Args $goodExe $receiptDir
+            $null = & $script @invokeArgs
+            $receiptFile = Get-ChildItem -LiteralPath $receiptDir -Filter '*.json' | Select-Object -First 1
+            Check 'positive-receipt-created' ($null -ne $receiptFile) 'One receipt exists.'
+            $receipt = Get-Content -LiteralPath $receiptFile.FullName -Raw | ConvertFrom-Json
+            Check 'positive-status' ($receipt.status -eq 'IDENTITY_READ') $receipt.status
+            Check 'positive-id-redacted' ($receipt.remote_id_redacted -eq $true -and $null -eq $receipt.remote_id) 'Raw ID absent.'
+            Check 'positive-id-length' ($receipt.remote_id_length -eq 9) ([string]$receipt.remote_id_length)
+            Check 'positive-id-hash' ($receipt.remote_id_sha256 -eq '15e2b0d3c33891ebb0f1ef609ec419420c20e320ce94c65fbc8c3312448eb225') $receipt.remote_id_sha256
+            Check 'positive-no-password' (-not $receipt.password_read -and -not $receipt.password_changed) 'Password fields false.'
+            Check 'positive-no-side-effects' (-not $receipt.settings_changed -and -not $receipt.service_changed -and -not $receipt.firewall_changed -and -not $receipt.network_listener_created) 'Mutation fields false.'
+            Check 'preexisting-process-preserved' (-not $held.HasExited) "PID $($held.Id) remains."
+            Stop-Process -Id $held.Id -Force
+            $held.WaitForExit()
+
+            $badHashRejected = $false
+            try {
+              $invokeArgs = Identity-Args $goodExe (Join-Path $root 'receipts-badhash')
+              $invokeArgs.ExpectedSha256 = ('0' * 64)
+              $null = & $script @invokeArgs
+            } catch { $badHashRejected = $_.Exception.Message -like '*SHA256 mismatch*' }
+            Check 'wrong-hash-rejected' $badHashRejected 'Expected exact-hash rejection.'
+
+            $multiBody = @'
+          using System;
+          public static class Program {
+            public static int Main(string[] args) {
+              if (args.Length == 1 && args[0] == "--get-id") {
+                Console.WriteLine("123456789");
+                Console.WriteLine("987654321");
+                return 0;
+              }
+              return 2;
+            }
+          }
+          '@
+            $multiExe = Compile-X64 (Join-Path $root 'multi') $multiBody
+            $multiRejected = $false
+            try { $invokeArgs = Identity-Args $multiExe (Join-Path $root 'receipts-multi'); $null = & $script @invokeArgs }
+            catch { $multiRejected = $_.Exception.Message -like '*exactly one valid ID token*' }
+            Check 'multiple-id-output-rejected' $multiRejected 'Ambiguous ID output fails closed.'
+
+            $hangBody = @'
+          using System;
+          using System.Threading;
+          public static class Program {
+            public static int Main(string[] args) {
+              if (args.Length == 1 && args[0] == "--get-id") { Thread.Sleep(30000); return 0; }
+              return 2;
+            }
+          }
+          '@
+            $hangExe = Compile-X64 (Join-Path $root 'hang') $hangBody
+            $timeoutRejected = $false
+            try { $invokeArgs = Identity-Args $hangExe (Join-Path $root 'receipts-hang'); $null = & $script @invokeArgs }
+            catch { $timeoutRejected = $_.Exception.Message -like '*exceeded the 5 second limit*' }
+            Check 'timeout-rejected' $timeoutRejected 'Bounded timeout fired.'
+            Start-Sleep -Milliseconds 500
+            $hangResidue = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+              try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath($hangExe)) } catch { $false }
+            })
+            Check 'timeout-process-cleaned' ($hangResidue.Count -eq 0) "Residue count $($hangResidue.Count)."
+
+            $x86Dir = Join-Path $root 'x86'
+            New-Item -ItemType Directory -Path $x86Dir | Out-Null
+            $x86Source = Join-Path $x86Dir 'Program.cs'
+            $x86Exe = Join-Path $x86Dir 'rustdesk-1.5.0-x86_64.exe'
+            [IO.File]::WriteAllText($x86Source, $goodBody)
+            $csc32 = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+            & $csc32 /nologo /target:exe /platform:x86 "/out:$x86Exe" $x86Source
+            if ($LASTEXITCODE -ne 0) { throw "x86 csc failed with $LASTEXITCODE" }
+            $archRejected = $false
+            try { $invokeArgs = Identity-Args $x86Exe (Join-Path $root 'receipts-x86'); $null = & $script @invokeArgs }
+            catch { $archRejected = $_.Exception.Message -like '*PE architecture mismatch*' }
+            Check 'wrong-pe-architecture-rejected' $archRejected 'x86 binary cannot pass x64 admission.'
+
+            $report = [ordered]@{
+              schema = 'ops.rustdesk.identity-reader.synthetic-tests/1'
+              observed_utc = [DateTime]::UtcNow.ToString('o')
+              powershell = $PSVersionTable.PSVersion.ToString()
+              os = [Environment]::OSVersion.VersionString
+              pass_count = $results.Count
+              cases = $results
+              scope = 'Synthetic signed-state-agnostic helper tests on a disposable Windows runner; no OPS machine, RustDesk account, public server, password, remote session or target setting.'
+            }
+            $report | ConvertTo-Json -Depth 8
+            "SYNTHETIC_PASS_COUNT=$($results.Count)"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Synthetic RustDesk identity-reader checks passed: $($results.Count)."
+          }
+          finally {
+            if ($held -and -not $held.HasExited) { Stop-Process -Id $held.Id -Force -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+  official-asset-static-pin:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: windows-2022
+    timeout-minutes: 6
+    steps:
+      - name: Download and verify exact official RustDesk 1.5.0 x64 asset without executing it
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path ([IO.Path]::GetTempPath()) ('rustdesk-official-pin-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+            $path = Join-Path $root 'rustdesk-1.5.0-x86_64.exe'
+            $url = 'https://github.com/rustdesk/rustdesk/releases/download/1.5.0/rustdesk-1.5.0-x86_64.exe'
+            Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing
+            $file = Get-Item -LiteralPath $path
+            if ($file.Length -ne 25887600) { throw "Byte mismatch: $($file.Length)" }
+            $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($sha -ne '8555777215510d83d2d61c9dc984e4fcc838bd7e79f9d18a42585431f5e8bb47') { throw "SHA mismatch: $sha" }
+            $stream = [IO.File]::OpenRead($path)
+            try {
+              $reader = New-Object IO.BinaryReader($stream)
+              $stream.Position = 0x3c
+              $offset = $reader.ReadInt32()
+              $stream.Position = $offset
+              if ($reader.ReadUInt32() -ne 0x00004550) { throw 'Invalid PE signature.' }
+              $machine = $reader.ReadUInt16()
+            } finally { $stream.Dispose() }
+            if ($machine -ne 0x8664) { throw ('PE mismatch: 0x{0:X4}' -f $machine) }
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            $result = [ordered]@{
+              schema = 'ops.rustdesk.official-static-pin/1'
+              observed_utc = [DateTime]::UtcNow.ToString('o')
+              source = $url
+              executed = $false
+              bytes = [long]$file.Length
+              sha256 = $sha
+              pe_machine = ('0x{0:X4}' -f $machine)
+              authenticode_status = [string]$signature.Status
+              signer_subject = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { $null }
+              scope = 'Official public x64 asset identity only; no --get-id, account, public-server session, GUI, password, remote connection, target machine or malware-free certification.'
+            }
+            $result | ConvertTo-Json -Depth 6
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Official RustDesk 1.5.0 x64 size/hash/PE pin passed. Binary was not executed."
+          }
+          finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
