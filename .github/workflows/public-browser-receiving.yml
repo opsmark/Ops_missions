@@ -1,82 +1,95 @@
-name: Receive completed browser files
+name: Read exact public SAM notice
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/public-browser-receiving.yml]
-permissions:
-  actions: read
-# Recover the prior exact job only. Does not rerun a browser or retry the HTTP403.
-# No AI executor, native endpoint, new account, schedule, cache or repository write.
-# Only the two public synthetic files, result and manifest enter one 1-day artifact.
+permissions: {}
+# Actual source-version question, not another fixture or old download replay.
+# Standard disposable runner; no checkout/install/model/account/private data.
 jobs:
-  receive-public-files:
+  public-notice:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
-      - name: Read completed job log and verify returned byte identities
+      - name: Read-only browser observation with sandbox and GET-only page requests
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-        shell: python
+          OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
         run: |
-          import os,ssl,http.client,urllib.request,urllib.parse,json,base64,hashlib,re
-          from pathlib import Path
-          job=117831025509
-          conn=http.client.HTTPSConnection('api.github.com',timeout=20,context=ssl.create_default_context())
-          conn.request('GET',f'/repos/opsmark/Ops_missions/actions/jobs/{job}/logs',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'User-Agent':'OPS-own-public-job-receiving','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
-          r=conn.getresponse()
-          if r.status==200:
-              raw=r.read(200001)
-          elif r.status==302:
-              url=r.getheader('Location');u=urllib.parse.urlsplit(url)
-              if u.scheme!='https' or not u.hostname or not (u.hostname.endswith('.blob.core.windows.net') or u.hostname.endswith('.actions.githubusercontent.com')):raise RuntimeError('Unrecognized GitHub log download destination')
-              # Fresh request deliberately has NO GitHub Authorization header.
-              class StopRedirect(urllib.request.HTTPRedirectHandler):
-                  def redirect_request(self,*a,**kw):raise RuntimeError('Unexpected second redirect')
-              with urllib.request.build_opener(StopRedirect).open(url,timeout=20) as dl:
-                  if dl.status!=200:raise RuntimeError('Log download status')
-                  raw=dl.read(200001)
-          else:raise RuntimeError('GitHub log request status '+str(r.status))
-          conn.close()
-          if len(raw)>200000:raise RuntimeError('Log bound')
-          lines=[re.sub(r'^\ufeff?\d{4}-\d\d-\d\dT\S+Z ','',x) for x in raw.decode('utf-8-sig').splitlines()]
-          first=lines.index('BEGIN_BROWSER_ROUNDTRIP_RESULT');last=lines.index('END_BROWSER_ROUNDTRIP_RESULT',first)
-          result=json.loads('\n'.join(lines[first+1:last]))
-          if result['status']!='INPUT_DOWNLOAD_REIMPORT_CLEAR_PASS' or not result['owned_process_group_gone'] or not result['owned_profile_and_downloads_removed']:raise RuntimeError('Original acceptance not complete')
-          expected={'browser-generated-fixture.json':(188,'91f0f396cd0b042f4c0e5ac351a952dfd9ec4fee651f9e46210bffbf1b6d23ee'),'browser-roundtrip.jpg':(24174,'9c53674ce31e88e22d0b3fe936478d4c3f5832589d0c6f25856b4512155a1c80')}
-          out=Path(os.environ['RUNNER_TEMP'])/'ops-public-return';out.mkdir(exist_ok=False)
-          for name,(size,digest) in expected.items():
-              start=lines.index(f'BEGIN_RETURNED_PUBLIC_FILE {name} {size} {digest}')
-              end=lines.index('END_RETURNED_PUBLIC_FILE '+name,start)
-              b=base64.b64decode(''.join(lines[start+1:end]),validate=True)
-              if len(b)!=size or hashlib.sha256(b).hexdigest()!=digest:raise RuntimeError('Returned bytes mismatch: '+name)
-              (out/name).write_bytes(b)
-          (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-          payloads=[{'name':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(out.iterdir())]
-          if sum(p['bytes'] for p in payloads)>40000:raise RuntimeError('Artifact payload bound')
-          manifest={'source_run':39180165574,'source_job':job,'workflow_commit':'9275e831b558dca7a3c49fc72effb389d035c514','source_log_sha256':hashlib.sha256(raw).hexdigest(),'method':'Decode byte-bound files from the completed job log; result.json is a structured extraction, not raw log bytes. No model reconstructed the files.','files':payloads}
-          (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-          print(json.dumps(manifest,indent=2))
-      - name: Return only verified public fixture files for one day
+          set -euo pipefail
+          test "$(id -u)" != 0
+          test -x /opt/google/chrome/chrome
+          dpkg-query -W -f='${Package} ${Version}\n' google-chrome-stable
+          dpkg -V google-chrome-stable
+          sha256sum /opt/google/chrome/chrome
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          cat > "$work/read_sam.mjs" <<'JS'
+          // One signed-out public notice read. No account, click, form, model or machine route.
+          import {spawn} from 'node:child_process';
+          import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs';
+          import {tmpdir} from 'node:os';
+          import {join} from 'node:path';
+          import {setTimeout as delay} from 'node:timers/promises';
+          import {createHash} from 'node:crypto';
+          const out=process.env.OUTPUT_DIR;
+          if(!out||process.getuid()===0)throw new Error('Explicit owned output and non-root browser required');
+          mkdirSync(out,{recursive:false,mode:0o700});
+          const root=mkdtempSync(join(tmpdir(),'ops-sam-read-'));const home=join(root,'home');mkdirSync(home);
+          const target='https://sam.gov/opp/8c0b487df44b45d0a7c6d97fcaa29b9f/view';
+          const report={schema:'ops099.public-sam-read/1',started_utc:new Date().toISOString(),target,status:'NOT_COMPLETED',requests:[],responses:[],errors:[],limits:['Signed-out public notice only. No login, click, form, account, model, application, credentials, anti-bot workaround or prior PDF redownload.','A returned page is not controlling-revision or applicant acceptance.']};
+          const browser=spawn('/opt/google/chrome/chrome',['--headless=new','--remote-debugging-pipe','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-default-apps','--disable-sync','--disable-extensions','--window-size=1280,960',`--user-data-dir=${join(root,'profile')}`,'about:blank'],{detached:true,stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:home,TMPDIR:root,LANG:'C.UTF-8'}});
+          let sequence=0,buffer=Buffer.alloc(0),closed=false,fatal=null,stderr='',session;
+          const pending=new Map();const handlers=[];
+          browser.stderr.on('data',b=>{stderr=(stderr+b.toString()).slice(-3000);});browser.on('error',e=>{fatal=e;});
+          browser.on('exit',()=>{closed=true;for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Owned browser exited'));}pending.clear();});
+          function send(method,params={},sessionId){if(fatal||closed)return Promise.reject(fatal||new Error('Browser closed'));const id=++sequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout '+method));},10000);pending.set(id,{resolve,reject,timer});browser.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0',e=>{if(e){clearTimeout(timer);pending.delete(id);reject(e);}});});}
+          browser.stdio[4].on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);if(buffer.length>4*1024*1024){fatal=new Error('Bounded CDP buffer exceeded');browser.kill('SIGTERM');return;}let end;while((end=buffer.indexOf(0))>=0){const b=buffer.subarray(0,end);buffer=buffer.subarray(end+1);if(!b.length)continue;let e;try{e=JSON.parse(b.toString());}catch{fatal=new Error('Invalid CDP JSON');continue;}if(e.id&&pending.has(e.id)){const p=pending.get(e.id);clearTimeout(p.timer);pending.delete(e.id);e.error?p.reject(new Error(e.error.message)):p.resolve(e.result);}else for(const h of handlers)Promise.resolve(h(e)).catch(x=>{fatal=x;});}});
+          async function value(expression){const r=await send('Runtime.evaluate',{expression,returnByValue:true},session);if(r.exceptionDetails)throw new Error('Read-only page evaluation failed');return r.result.value;}
+          async function body(){return await value('({url:location.href,title:document.title,text:document.body?.innerText.slice(0,22000)||"",links:Array.from(document.querySelectorAll("a[href]")).slice(0,120).map(a=>({text:a.innerText.trim().slice(0,180),href:(()=>{try{const u=new URL(a.href);return u.origin+u.pathname}catch{return "INVALID"}})()}))})');}
+          try{
+           report.browser=await send('Browser.getVersion');const t=await send('Target.createTarget',{url:'about:blank'});session=(await send('Target.attachToTarget',{targetId:t.targetId,flatten:true})).sessionId;await send('Page.enable',{},session);await send('Runtime.enable',{},session);await send('Network.enable',{},session);
+           await send('Page.navigate',{url:'chrome://sandbox'},session);await delay(300);report.sandbox_text=await value('document.body.innerText');if(!/adequately sandboxed/i.test(report.sandbox_text)||!/Seccomp-BPF sandbox\s+Yes/i.test(report.sandbox_text))throw new Error('Sandbox not positively established; no public navigation');
+           let requests=0;handlers.push(async e=>{if(e.sessionId!==session)return;if(e.method==='Network.responseReceived'){const q=e.params.response;try{const u=new URL(q.url);if(report.responses.length<100)report.responses.push({url:u.origin+u.pathname,status:q.status,mime:q.mimeType});}catch{}}if(e.method!=='Fetch.requestPaused')return;const q=e.params;let u;try{u=new URL(q.request.url);}catch{}requests++;const allowed=requests<=200&&u&&u.protocol==='https:'&&(u.hostname==='sam.gov'||u.hostname.endsWith('.sam.gov')||u.hostname==='gsa.gov'||u.hostname.endsWith('.gsa.gov'))&&['GET','HEAD'].includes(q.request.method)&&!/(?:\/login|\/signin|\/logout|\/oauth|\/token|\/delete)/i.test(u.pathname);if(report.requests.length<200)report.requests.push({method:q.request.method,url:u?u.origin+u.pathname:'INVALID',allowed:!!allowed});await send(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:q.requestId}:{requestId:q.requestId,errorReason:'BlockedByClient'},session);});
+           await send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},session);const nav=await send('Page.navigate',{url:target},session);if(nav.errorText)throw new Error('Navigation '+nav.errorText);
+           for(let i=0;i<20;i++){await delay(1000);if(fatal)throw fatal;try{const snapshot=await body();report.page=snapshot;if(/verify you are human|access denied|captcha|unusual traffic|you must sign in|please sign in to (?:view|access)|ERR_BLOCKED/i.test(snapshot.text)){report.status='STOPPED_AT_PUBLIC_ACCESS_OR_VERIFICATION_BARRIER';break;}if(snapshot.text.includes('HR001126S0011')&&snapshot.text.length>1000){report.status='PUBLIC_NOTICE_TEXT_RECEIVED';break;}}catch(e){if(closed)throw e;}}
+           if(report.status==='NOT_COMPLETED')report.status='NOTICE_CONTENT_NOT_ESTABLISHED_WITHIN_BOUND';
+           try{const shot=await send('Page.captureScreenshot',{format:'jpeg',quality:55,captureBeyondViewport:false},session);const b=Buffer.from(shot.data,'base64');if(b.length>1500000)throw new Error('Screenshot bound');writeFileSync(join(out,'sam-notice-observed.jpg'),b,{flag:'wx'});report.screenshot={file:'sam-notice-observed.jpg',bytes:b.length,sha256:createHash('sha256').update(b).digest('hex'),visual_review:'PENDING_RETURN'};}catch(e){report.errors.push(e.message);}
+          }catch(e){report.status='BLOCKED';report.errors.push(e.message);report.browser_stderr_tail=stderr;}
+          finally{
+           try{if(!closed)await send('Browser.close');}catch{}
+           const alive=()=>{try{process.kill(-browser.pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
+           for(let i=0;i<30&&!closed;i++)await delay(100);
+           if(Number.isInteger(browser.pid)&&browser.pid>1&&alive()){process.kill(-browser.pid,'SIGTERM');for(let i=0;i<30&&alive();i++)await delay(100);if(alive()){process.kill(-browser.pid,'SIGKILL');for(let i=0;i<20&&alive();i++)await delay(100);}}
+           report.owned_process_group_gone=Number.isInteger(browser.pid)&&browser.pid>1&&!alive();
+           if(report.owned_process_group_gone){rmSync(root,{recursive:true,force:true});report.owned_profile_removed=!existsSync(root);}else report.errors.push('Owned process cleanup unverified');
+           report.finished_utc=new Date().toISOString();writeFileSync(join(out,'RESULT.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.log('BEGIN_PUBLIC_SAM_RESULT');console.log(JSON.stringify(report,null,2));console.log('END_PUBLIC_SAM_RESULT');
+           if(report.status!=='PUBLIC_NOTICE_TEXT_RECEIVED'||!report.owned_process_group_gone)process.exitCode=2;
+          }
+          JS
+          node --check "$work/read_sam.mjs"
+          timeout --signal=TERM --kill-after=5 100 node "$work/read_sam.mjs"
+      - name: Return bounded observed public text and screenshot, including any explicit hold
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: ops-public-browser-return-39180165574
+          name: ops-public-sam-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/ops-public-return/browser-generated-fixture.json
-            ${{ runner.temp }}/ops-public-return/browser-roundtrip.jpg
-            ${{ runner.temp }}/ops-public-return/result.json
-            ${{ runner.temp }}/ops-public-return/manifest.json
-          retention-days: 1
+            ${{ runner.temp }}/ops-sam-output/RESULT.json
+            ${{ runner.temp }}/ops-sam-output/sam-notice-observed.jpg
           if-no-files-found: error
+          retention-days: 1
           include-hidden-files: false
           overwrite: false
-      - name: Remove only this receiving job's temporary outputs
+      - name: Remove only the owned receiving directory
         if: always()
         shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
         run: |
-          import os,shutil
-          from pathlib import Path
-          p=Path(os.environ['RUNNER_TEMP'])/'ops-public-return'
+          import os,pathlib,shutil
+          p=pathlib.Path(os.environ['OUTPUT_DIR'])
           if p.exists():shutil.rmtree(p)
-          assert not p.exists()
-          print('OWN_RECEIVING_OUTPUTS_REMOVED')
+          if p.exists():raise RuntimeError('Owned output cleanup failed')
+          print('Owned receiving outputs removed')
