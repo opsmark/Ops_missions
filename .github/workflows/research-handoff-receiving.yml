@@ -1,54 +1,67 @@
-name: Exact official-source PDF comparison input
+name: Bind current SAM attachment bytes
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/research-handoff-receiving.yml]
 permissions: {}
-# One DISTINCT public issuer attachment. The previously received -02 file says
-# Amendment01 inside; retrieve -01 to compare, not repeat the completed download.
-# No checkout, model, install, login, submission, native PC, private data or schedule.
+# Distinct source-identity step: exact public link observed in run39339406323.
+# No mirror replay, account/key, model, private input, installation or native PC.
 jobs:
-  receive-official-source:
+  current-attachment:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Retrieve only the exact earlier attachment as inert bytes
+      - name: Read bounded public PDF from its actual current issuer link
         shell: python
         env:
           OUTPUT_DIR: ${{ runner.temp }}/ops-official-source-return
         run: |
-          import hashlib,json,os,pathlib,urllib.request
+          import hashlib,json,os,pathlib,urllib.request,urllib.parse,sys
           from datetime import datetime,timezone
           root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
-          url='https://files.simpler.grants.gov/opportunities/4ec76651-17d7-47fd-ac5e-377e8673b3a4/attachments/bc37d329-f65d-4c2a-b5cb-d3bf8f52193f/HR001126S0011-Amendment-01.pdf'
-          report={'schema':'ops099.exact-official-source-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_listing':'https://simpler.grants.gov/opportunity/4ec76651-17d7-47fd-ac5e-377e8673b3a4','url':url,'scope':'Distinct earlier official public original bytes for version comparison only; no application, qualification, classified material, or malware-free claim.'}
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,*a,**k):raise RuntimeError('Unexpected redirect; not followed')
-          request=urllib.request.Request(url,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
-          with urllib.request.build_opener(NoRedirect).open(request,timeout=30) as response:
-              content=response.read(5000001)
-              if response.status!=200 or response.geturl()!=url or not 1000<=len(content)<=5000000 or not content.startswith(b'%PDF-'):raise RuntimeError('Response is not an admitted bounded PDF')
-              report.update(status='OFFICIAL_PDF_BYTES_RECEIVED',http_status=response.status,content_type=response.headers.get('Content-Type'),bytes=len(content),sha256=hashlib.sha256(content).hexdigest())
-          (root/'HR001126S0011-Amendment-01.pdf').write_bytes(content)
+          url='https://sam.gov/api/prod/opps/v3/opportunities/resources/files/5efbfafafc9743da9b73269bd03d2c7f/download'
+          expected='753c9f02cb84127cd382455d9a4ec859a5b20417be5887ecce82cbd6f467e937'
+          report={'schema':'ops099.current-issuer-attachment/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_listing':'https://sam.gov/opp/bdfe7a50582b4b0b81c03f2028bcf492/view','url':url,'observed_link_run':39339406323,'retained_original_sha256':expected,'redirects':[],'scope':'One public BAA attachment identity comparison; no application, credentials, other files, private links or malware certification.'}
+          class Redirects(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,req,fp,code,msg,headers,newurl):
+                  resolved=urllib.parse.urljoin(req.full_url,newurl);u=urllib.parse.urlsplit(resolved);host=u.hostname or ''
+                  allowed=u.scheme=='https' and not u.username and not u.password and (host=='sam.gov' or host.endswith('.sam.gov') or host.endswith('.amazonaws.com')) and len(report['redirects'])<2
+                  report['redirects'].append({'status':code,'host':host,'allowed':allowed})
+                  if not allowed:raise RuntimeError('Unadmitted download redirect; not followed')
+                  # No Authorization/Cookie/Referer headers are supplied or forwarded.
+                  return urllib.request.Request(resolved,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
+          try:
+              request=urllib.request.Request(url,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
+              with urllib.request.build_opener(Redirects).open(request,timeout=30) as response:
+                  content=response.read(5000001)
+                  if response.status!=200 or not 1000<=len(content)<=5000000 or not content.startswith(b'%PDF-'):raise RuntimeError('Response failed bounded PDF admission')
+                  digest=hashlib.sha256(content).hexdigest()
+                  report.update(status='CURRENT_ISSUER_PDF_RECEIVED',http_status=response.status,content_type=response.headers.get('Content-Type'),bytes=len(content),sha256=digest,matches_retained_original=digest==expected)
+              (root/'SAM_current_Amendment-02.pdf').write_bytes(content)
+          except Exception as e:
+              report.update(status='SOURCE_HOLD',error_type=type(e).__name__)
+              if hasattr(e,'code'):report['http_status']=e.code
           report['finished_utc']=datetime.now(timezone.utc).isoformat()
           (root/'ACQUISITION.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
           manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
           (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
           print(json.dumps(report,indent=2))
-      - name: Return named public PDF and original receipt
+          if report['status']!='CURRENT_ISSUER_PDF_RECEIVED':sys.exit(2)
+      - name: Return exact observed public bytes or hold receipt
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: ops-official-source-${{ github.run_id }}
+          name: ops-current-sam-source-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/ops-official-source-return/HR001126S0011-Amendment-01.pdf
+            ${{ runner.temp }}/ops-official-source-return/SAM_current_Amendment-02.pdf
             ${{ runner.temp }}/ops-official-source-return/ACQUISITION.json
             ${{ runner.temp }}/ops-official-source-return/MANIFEST.json
           if-no-files-found: error
           retention-days: 1
           include-hidden-files: false
           overwrite: false
-      - name: Remove only this owned directory
+      - name: Remove only this owned receiving directory
         if: always()
         shell: python
         env:
