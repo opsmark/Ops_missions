@@ -1,18 +1,20 @@
-name: Read linked latest public SAM notice
+name: Read visible SAM attachments section
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/public-browser-receiving.yml]
 permissions: {}
-# Follow the actual latest-action link returned by completed run39264019985.
-# Same isolated GET-only route; no old-page replay, account, model or native PC.
+# One changed read step: use observed Attachments/Links navigation for the
+# incomplete public attachment section, not another silent wait or download.
+# Reuse exact already-reviewed own script from immutable commit. No AI, account,
+# install, credentials, private input, unrelated request, or native PC access.
 jobs:
   public-notice:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
-      - name: Read latest notice and its public attachment table
+      - name: Reuse pinned source and read the public attachments section
         shell: bash
         env:
           OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
@@ -25,52 +27,44 @@ jobs:
           sha256sum /opt/google/chrome/chrome
           work="$(mktemp -d)"
           trap 'rm -rf -- "$work"' EXIT
-          cat > "$work/read_sam.mjs" <<'JS'
-          import {spawn} from 'node:child_process';
-          import {mkdtempSync,mkdirSync,writeFileSync,rmSync,existsSync} from 'node:fs';
-          import {tmpdir} from 'node:os';
-          import {join} from 'node:path';
-          import {setTimeout as delay} from 'node:timers/promises';
-          import {createHash} from 'node:crypto';
-          const out=process.env.OUTPUT_DIR;
-          if(!out||process.getuid()===0)throw new Error('Explicit owned output and non-root browser required');
-          mkdirSync(out,{recursive:false,mode:0o700});
-          const root=mkdtempSync(join(tmpdir(),'ops-sam-read-'));const home=join(root,'home');mkdirSync(home);
-          const target='https://sam.gov/opp/bdfe7a50582b4b0b81c03f2028bcf492/view';
-          const report={schema:'ops099.public-sam-read/2',started_utc:new Date().toISOString(),target,predecessor_run:39264019985,status:'NOT_COMPLETED',requests:[],responses:[],errors:[],limits:['Signed-out public notice only. No login, click, form, account, model, application, credentials, anti-bot workaround or prior PDF redownload.','Latest public listing is distinct from a guarantee about internal attachment revision labels or applicant acceptance.']};
-          const browser=spawn('/opt/google/chrome/chrome',['--headless=new','--remote-debugging-pipe','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-default-apps','--disable-sync','--disable-extensions','--window-size=1280,960',`--user-data-dir=${join(root,'profile')}`,'about:blank'],{detached:true,stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:home,TMPDIR:root,LANG:'C.UTF-8'}});
-          let sequence=0,buffer=Buffer.alloc(0),closed=false,fatal=null,stderr='',session;
-          const pending=new Map();const handlers=[];
-          browser.stderr.on('data',b=>{stderr=(stderr+b.toString()).slice(-3000);});browser.on('error',e=>{fatal=e;});
-          browser.on('exit',()=>{closed=true;for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Owned browser exited'));}pending.clear();});
-          function send(method,params={},sessionId){if(fatal||closed)return Promise.reject(fatal||new Error('Browser closed'));const id=++sequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout '+method));},10000);pending.set(id,{resolve,reject,timer});browser.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0',e=>{if(e){clearTimeout(timer);pending.delete(id);reject(e);}});});}
-          browser.stdio[4].on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);if(buffer.length>4*1024*1024){fatal=new Error('Bounded CDP buffer exceeded');browser.kill('SIGTERM');return;}let end;while((end=buffer.indexOf(0))>=0){const b=buffer.subarray(0,end);buffer=buffer.subarray(end+1);if(!b.length)continue;let e;try{e=JSON.parse(b.toString());}catch{fatal=new Error('Invalid CDP JSON');continue;}if(e.id&&pending.has(e.id)){const p=pending.get(e.id);clearTimeout(p.timer);pending.delete(e.id);e.error?p.reject(new Error(e.error.message)):p.resolve(e.result);}else for(const h of handlers)Promise.resolve(h(e)).catch(x=>{fatal=x;});}});
-          async function value(expression){const r=await send('Runtime.evaluate',{expression,returnByValue:true},session);if(r.exceptionDetails)throw new Error('Read-only page evaluation failed');return r.result.value;}
-          async function body(){return await value('({url:location.href,title:document.title,text:document.body?.innerText.slice(0,22000)||"",tables:Array.from(document.querySelectorAll("table")).slice(0,10).map(t=>t.innerText.slice(0,12000)),links:Array.from(document.querySelectorAll("a[href]")).slice(0,120).map(a=>({text:a.innerText.trim().slice(0,180),href:(()=>{try{const u=new URL(a.href);return ["https:","http:"].includes(u.protocol)?u.origin+u.pathname:"NON_HTTP"}catch{return "INVALID"}})()}))})');}
-          try{
-           report.browser=await send('Browser.getVersion');const t=await send('Target.createTarget',{url:'about:blank'});session=(await send('Target.attachToTarget',{targetId:t.targetId,flatten:true})).sessionId;await send('Page.enable',{},session);await send('Runtime.enable',{},session);await send('Network.enable',{},session);
-           await send('Page.navigate',{url:'chrome://sandbox'},session);await delay(300);report.sandbox_text=await value('document.body.innerText');if(!/adequately sandboxed/i.test(report.sandbox_text)||!/Seccomp-BPF sandbox\s+Yes/i.test(report.sandbox_text))throw new Error('Sandbox not positively established; no public navigation');
-           let requests=0;handlers.push(async e=>{if(e.sessionId!==session)return;if(e.method==='Network.responseReceived'){const q=e.params.response;try{const u=new URL(q.url);if(report.responses.length<100)report.responses.push({url:u.origin+u.pathname,status:q.status,mime:q.mimeType});}catch{}}if(e.method!=='Fetch.requestPaused')return;const q=e.params;let u;try{u=new URL(q.request.url);}catch{}requests++;const allowed=requests<=200&&u&&u.protocol==='https:'&&(u.hostname==='sam.gov'||u.hostname.endsWith('.sam.gov')||u.hostname==='gsa.gov'||u.hostname.endsWith('.gsa.gov'))&&['GET','HEAD'].includes(q.request.method)&&!/(?:\/login|\/signin|\/logout|\/oauth|\/token|\/delete)/i.test(u.pathname);if(report.requests.length<200)report.requests.push({method:q.request.method,url:u?u.origin+u.pathname:'INVALID',allowed:!!allowed});await send(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:q.requestId}:{requestId:q.requestId,errorReason:'BlockedByClient'},session);});
-           await send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},session);const nav=await send('Page.navigate',{url:target},session);if(nav.errorText)throw new Error('Navigation '+nav.errorText);
+          export OWN_SCRIPT_DIR="$work"
+          python - <<'PY'
+          import os,pathlib,urllib.request,hashlib,textwrap
+          url='https://raw.githubusercontent.com/opsmark/Ops_missions/5b863063bd006b16debb07cec00ec64fca3d9cd0/.github/workflows/public-browser-receiving.yml'
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*a,**k):raise RuntimeError('Unexpected source redirect')
+          with urllib.request.build_opener(NoRedirect).open(url,timeout=20) as r:
+              b=r.read(30001)
+              if r.status!=200 or r.geturl()!=url or len(b)>30000:raise RuntimeError('Source admission failed')
+          gitblob=hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+          if gitblob!='28cfadfdd2ef4b6a668c2a510750a80c8e5f6f46':raise RuntimeError('Reviewed source drift')
+          t=b.decode('utf-8')
+          start="          cat > \"$work/read_sam.mjs\" <<'JS'\n"
+          end='          JS\n'
+          if t.count(start)!=1 or t.count(end)!=1:raise RuntimeError('Ambiguous source markers')
+          js=textwrap.dedent(t.split(start,1)[1].split(end,1)[0])
+          needle=' let previousText=null;'
+          if js.count(needle)!=1:raise RuntimeError('Action insertion point mismatch')
+          action="""
+           await delay(1500);
+           report.attachment_navigation=await value(`(()=>{
+             const matches=Array.from(document.querySelectorAll('a,button,[role=link],[role=button]')).filter(e=>e.innerText?.trim()==='Attachments/Links');
+             if(matches.length!==1)return {state:'EXACT_VISIBLE_NAV_NOT_UNIQUE',matches:matches.length};
+             const e=matches[0];const r=e.getBoundingClientRect();
+             if(!r.width||!r.height||e.disabled)return {state:'NAV_NOT_VISIBLE_OR_ENABLED'};
+             e.click();return {state:'VISIBLE_ATTACHMENTS_NAV_CLICKED',tag:e.tagName,text:e.innerText.trim()};
+           })()`);
            let previousText=null;
-           for(let i=0;i<20;i++){await delay(1000);if(fatal)throw fatal;try{const snapshot=await body();report.page=snapshot;if(/verify you are human|access denied|captcha|unusual traffic|you must sign in|please sign in to (?:view|access)|ERR_BLOCKED/i.test(snapshot.text)){report.status='STOPPED_AT_PUBLIC_ACCESS_OR_VERIFICATION_BARRIER';break;}if(snapshot.text.includes('HR001126S0011')&&snapshot.text.includes('Amendment-02.pdf')&&snapshot.text===previousText){report.status='PUBLIC_NOTICE_AND_ATTACHMENT_TABLE_RECEIVED';break;}previousText=snapshot.text;}catch(e){if(closed)throw e;}}
-           if(report.status==='NOT_COMPLETED')report.status='NOTICE_ATTACHMENT_CONTENT_NOT_ESTABLISHED_WITHIN_BOUND';
-           try{const shot=await send('Page.captureScreenshot',{format:'jpeg',quality:55,captureBeyondViewport:false},session);const b=Buffer.from(shot.data,'base64');if(b.length>1500000)throw new Error('Screenshot bound');writeFileSync(join(out,'sam-notice-observed.jpg'),b,{flag:'wx'});report.screenshot={file:'sam-notice-observed.jpg',bytes:b.length,sha256:createHash('sha256').update(b).digest('hex'),visual_review:'PENDING_RETURN'};}catch(e){report.errors.push(e.message);}
-          }catch(e){report.status='BLOCKED';report.errors.push(e.message);report.browser_stderr_tail=stderr;}
-          finally{
-           try{if(!closed)await send('Browser.close');}catch{}
-           const alive=()=>{try{process.kill(-browser.pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
-           for(let i=0;i<30&&!closed;i++)await delay(100);
-           if(Number.isInteger(browser.pid)&&browser.pid>1&&alive()){process.kill(-browser.pid,'SIGTERM');for(let i=0;i<30&&alive();i++)await delay(100);if(alive()){process.kill(-browser.pid,'SIGKILL');for(let i=0;i<20&&alive();i++)await delay(100);}}
-           report.owned_process_group_gone=Number.isInteger(browser.pid)&&browser.pid>1&&!alive();
-           if(report.owned_process_group_gone){rmSync(root,{recursive:true,force:true});report.owned_profile_removed=!existsSync(root);}else report.errors.push('Owned process cleanup unverified');
-           report.finished_utc=new Date().toISOString();writeFileSync(join(out,'RESULT.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.log('BEGIN_PUBLIC_SAM_RESULT');console.log(JSON.stringify(report,null,2));console.log('END_PUBLIC_SAM_RESULT');
-           if(report.status!=='PUBLIC_NOTICE_AND_ATTACHMENT_TABLE_RECEIVED'||!report.owned_process_group_gone)process.exitCode=2;
-          }
-          JS
+          """
+          js=js.replace(needle,textwrap.dedent(action),1)
+          p=pathlib.Path(os.environ['OWN_SCRIPT_DIR'])/'read_sam.mjs'
+          p.write_text(js,encoding='utf-8')
+          print('REUSED_REVIEWED_SOURCE_GIT_BLOB',gitblob)
+          print('EXECUTED_SOURCE_SHA256',hashlib.sha256(js.encode()).hexdigest())
+          PY
           node --check "$work/read_sam.mjs"
           timeout --signal=TERM --kill-after=5 100 node "$work/read_sam.mjs"
-      - name: Return bounded observed public text and screenshot, including any explicit hold
+      - name: Return actual bounded public observation, including any hold
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -82,7 +76,7 @@ jobs:
           retention-days: 1
           include-hidden-files: false
           overwrite: false
-      - name: Remove only the owned receiving directory
+      - name: Remove only owned output
         if: always()
         shell: python
         env:
