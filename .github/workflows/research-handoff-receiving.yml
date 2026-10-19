@@ -4,98 +4,76 @@ on:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/research-handoff-receiving.yml]
 permissions: {}
-# Fixed, public data-only check. No checkout, installs, secrets, model calls,
-# artifact/cache upload, schedule, private machine or archive-member execution.
+# This is one exact public-asset receiving task, not a browser/service/controller.
+# No agency-page retry, account, model, checkout, package install or native PC.
 jobs:
-  existing-handoff:
+  receive-original-package:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Inspect observed canonical reader and exact previously received ZIP
+      - name: Receive unchanged published ZIP and canonical reader without execution
         shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops-research-return
         run: |
-          import csv, hashlib, io, json, re, stat, sys, urllib.parse, urllib.request, zipfile
+          import hashlib, io, json, os, pathlib, stat, urllib.request, zipfile
           from datetime import datetime, timezone
-          from html.parser import HTMLParser
-          from pathlib import PurePosixPath
-          origin='https://ops-workflow-cost-calculator.rass991.chatgpt.site'
-          base=origin+'/assets/research-brief-example/'
-          # The same-origin directory URL was actually returned by HTTP307 in run39140342733.
-          allowed={base,base+'index.html',base+'research-brief-example.zip'}
-          expected_zip='8d72c285d2d19286f274e4601d1955d960ffa43af35749ad37bc9e9a5871a872'
-          report={'schema':'ops099.public-research-handoff-receiving/3','started_utc':datetime.now(timezone.utc).isoformat(),'status':'NOT_COMPLETED','reads':[],'redirects':[],'errors':[],'limits':['Public source artifact structure only, not customer execution, source-fact verification, visual PDF review or malware clearance.','No file extracted or executed. Unknown suffixes are inventoried and not read, not called malware.']}
-          class Redirects(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,req,fp,code,msg,headers,newurl):
-                  resolved=urllib.parse.urljoin(req.full_url,newurl)
-                  report['redirects'].append({'status':code,'allowed':resolved in allowed})
-                  if resolved not in allowed:raise RuntimeError('Redirect outside three exact observed public URLs')
-                  return super().redirect_request(req,fp,code,msg,headers,resolved)
-          opener=urllib.request.build_opener(Redirects)
-          def receive(url,cap):
+          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(exist_ok=False)
+          base='https://ops-workflow-cost-calculator.rass991.chatgpt.site/assets/research-brief-example/'
+          expected='8d72c285d2d19286f274e4601d1955d960ffa43af35749ad37bc9e9a5871a872'
+          report={'schema':'ops099.existing-research-original-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'reads':[],'scope':'Published existing files, not new client work or a source/virus/approval verdict.'}
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):raise RuntimeError('Unexpected redirect; stop without following')
+          op=urllib.request.build_opener(NoRedirect)
+          def get(url,cap):
               req=urllib.request.Request(url,headers={'User-Agent':'OPS-public-artifact-receiving/1'},method='GET')
-              with opener.open(req,timeout=20) as r:
+              with op.open(req,timeout=20) as r:
                   b=r.read(cap+1)
-                  if r.status!=200 or r.geturl() not in allowed or len(b)>cap:raise RuntimeError('HTTP identity/status/size gate')
-                  report['reads'].append({'url':url,'final_url':r.geturl(),'status':r.status,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'content_type':r.headers.get('Content-Type')})
+                  if r.status!=200 or r.geturl()!=url or len(b)>cap:raise RuntimeError('HTTP status/size/identity gate')
+                  report['reads'].append({'url':url,'status':r.status,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'content_type':r.headers.get('Content-Type')})
                   return b
-          class InspectHTML(HTMLParser):
-              def __init__(self):super().__init__();self.in_title=False;self.in_tbody=False;self.rows=0;self.title=[];self.scripts=[]
-              def handle_starttag(self,tag,attrs):
-                  if tag=='title':self.in_title=True
-                  if tag=='tbody':self.in_tbody=True
-                  if tag=='tr' and self.in_tbody:self.rows+=1
-                  if tag=='script':self.scripts.append(dict(attrs).get('src','INLINE_NOT_EXECUTED'))
-              def handle_endtag(self,tag):
-                  if tag=='title':self.in_title=False
-                  if tag=='tbody':self.in_tbody=False
-              def handle_data(self,data):
-                  if self.in_title:self.title.append(data)
-          html=None
+          b=get(base+'research-brief-example.zip',200000)
+          if len(b)!=85292 or hashlib.sha256(b).hexdigest()!=expected:raise RuntimeError('Published package changed; no inspection or upload')
+          with zipfile.ZipFile(io.BytesIO(b)) as z:
+              info=z.infolist()
+              if {i.filename for i in info}!={'index.html','summary.pdf','sourced-rows.csv','READ_FIRST.txt','research-brief.xlsx'} or len(info)!=5:raise RuntimeError('Unexpected member set')
+              if sum(i.file_size for i in info)>1000000:raise RuntimeError('Expanded size bound')
+              if any(i.flag_bits&1 or stat.S_ISLNK(i.external_attr>>16) for i in info):raise RuntimeError('Encrypted or symlink member')
+              if z.testzip() is not None:raise RuntimeError('CRC failure')
+          (root/'research-brief-example.original.zip').write_bytes(b)
           try:
-              try:
-                  html=receive(base,300000)
-                  page=InspectHTML();page.feed(html.decode('utf-8-sig'))
-                  report['public_reader']={'title':''.join(page.title),'tbody_data_rows':page.rows,'scripts_not_executed':page.scripts}
-              except Exception as e:report['public_reader']={'status':'NOT_RECEIVED','reason':str(e)}
-              blob=receive(base+'research-brief-example.zip',2000000)
-              if hashlib.sha256(blob).hexdigest()!=expected_zip:raise RuntimeError('Public ZIP changed since exact receiving observation; stop before inspection')
-              with zipfile.ZipFile(io.BytesIO(blob)) as z:
-                  infos=z.infolist()
-                  report['archive_directory']=[{'name':i.filename,'bytes':i.file_size,'encrypted':bool(i.flag_bits&1)} for i in infos[:40]]
-                  if len(infos)>40 or sum(i.file_size for i in infos)>4000000:raise RuntimeError('Archive bounds exceeded')
-                  names=set();files=[];csv_names=[];unknown=[]
-                  text_or_image={'.csv','.pdf','.html','.htm','.md','.txt','.css','.json','.png','.jpg','.jpeg','.svg','.sha256'}
-                  text_names={'SHA256SUMS','LICENSE','README','SHA256SUMS.txt'}
-                  for i in infos:
-                      p=PurePosixPath(i.filename)
-                      if '\\' in i.filename or ':' in i.filename or p.is_absolute() or '..' in p.parts or any(ord(c)<32 for c in i.filename) or stat.S_ISLNK(i.external_attr>>16) or i.flag_bits&1:raise RuntimeError('Unsafe/encrypted member: '+i.filename)
-                      if i.filename.casefold() in names:raise RuntimeError('Duplicate/case-colliding member: '+i.filename)
-                      names.add(i.filename.casefold())
-                      if i.is_dir():continue
-                      if p.suffix.lower() not in text_or_image and p.name not in text_names:
-                          unknown.append(i.filename);continue
-                      b=z.read(i)
-                      item={'name':i.filename,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
-                      if p.suffix.lower()=='.pdf':item['pdf_header_only']=b.startswith(b'%PDF-')
-                      files.append(item)
-                      if p.suffix.lower()=='.csv':csv_names.append(i.filename)
-                  report['archive']={'members':len(infos),'expanded_bytes':sum(i.file_size for i in infos),'hashed_data_members':files,'unexamined_members':unknown,'path_checks':'PASS','crc_checked_for_read_members_only':True}
-                  if len(csv_names)!=1:raise RuntimeError('Expected one unambiguous research-row CSV')
-                  reader=csv.DictReader(io.StringIO(z.read(csv_names[0]).decode('utf-8-sig'),newline=''));rows=list(reader);columns=reader.fieldnames or []
-                  url_columns=[c for c in columns if 'url' in c.lower()]
-                  urls_by_row=[[u for c in url_columns for u in re.findall(r'https://[^\s<>"\x27]+',row.get(c,'') or '')] for row in rows]
-                  rectangular=all(None not in row and all(v is not None for v in row.values()) for row in rows)
-                  report['research_rows']={'file':csv_names[0],'columns':columns,'data_rows':len(rows),'url_columns':url_columns,'each_row_has_source_url':bool(rows) and all(urls_by_row),'source_hosts':sorted({urllib.parse.urlsplit(u).hostname for row in urls_by_row for u in row}),'csv_rectangular':rectangular}
-                  readers=[i for i in files if PurePosixPath(i['name']).suffix.lower() in {'.html','.htm'}]
-                  report['offline_readers']=[]
-                  for i in readers:
-                      parsed=InspectHTML();parsed.feed(z.read(i['name']).decode('utf-8-sig'))
-                      report['offline_readers'].append({'name':i['name'],'title':''.join(parsed.title),'tbody_data_rows':parsed.rows,'scripts_not_executed':parsed.scripts,'matches_public_html_bytes':i['sha256']==hashlib.sha256(html).hexdigest() if html is not None else None})
-                  if len(rows)!=6 or not all(urls_by_row) or not rectangular or not readers or not any(i.get('pdf_header_only') for i in files):raise RuntimeError('Announced six-row CSV/PDF/reader package not established')
-                  report['status']='SIX_ROW_PUBLIC_HANDOFF_DATA_RECEIVED'
-          except Exception as e:report['status']='BLOCKED_OR_MISMATCH';report['errors'].append(str(e))
-          finally:
-              report['finished_utc']=datetime.now(timezone.utc).isoformat()
-              print('BEGIN_PUBLIC_HANDOFF_RESULT');print(json.dumps(report,indent=2));print('END_PUBLIC_HANDOFF_RESULT')
-          if report['errors']:sys.exit(1)
+              h=get(base,100000)
+              (root/'public-reader.original.html').write_bytes(h)
+          except Exception as e:
+              report['reader_unavailable']=str(e)
+          report['finished_utc']=datetime.now(timezone.utc).isoformat()
+          report['status']='EXACT_EXISTING_ZIP_RECEIVED'
+          (root/'ACQUISITION.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+          manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
+          (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(report,indent=2))
+      - name: Return only named public files for actual receiving inspection
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ops-existing-research-originals-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ops-research-return/research-brief-example.original.zip
+            ${{ runner.temp }}/ops-research-return/public-reader.original.html
+            ${{ runner.temp }}/ops-research-return/ACQUISITION.json
+            ${{ runner.temp }}/ops-research-return/MANIFEST.json
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: false
+          overwrite: false
+      - name: Remove only the owned receiving directory
+        if: always()
+        shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops-research-return
+        run: |
+          import os, pathlib, shutil
+          p=pathlib.Path(os.environ['OUTPUT_DIR'])
+          if p.exists():shutil.rmtree(p)
+          if p.exists():raise RuntimeError('Owned-directory cleanup failed')
+          print('Owned receiving directory removed; no other paths touched')
