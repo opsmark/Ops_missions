@@ -1,18 +1,18 @@
-name: Read exact public SAM notice
+name: Read linked latest public SAM notice
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/public-browser-receiving.yml]
 permissions: {}
-# Actual source-version question, not another fixture or old download replay.
-# Standard disposable runner; no checkout/install/model/account/private data.
+# Follow the actual latest-action link returned by completed run39264019985.
+# Same isolated GET-only route; no old-page replay, account, model or native PC.
 jobs:
   public-notice:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
-      - name: Read-only browser observation with sandbox and GET-only page requests
+      - name: Read latest notice and its public attachment table
         shell: bash
         env:
           OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
@@ -26,9 +26,8 @@ jobs:
           work="$(mktemp -d)"
           trap 'rm -rf -- "$work"' EXIT
           cat > "$work/read_sam.mjs" <<'JS'
-          // One signed-out public notice read. No account, click, form, model or machine route.
           import {spawn} from 'node:child_process';
-          import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs';
+          import {mkdtempSync,mkdirSync,writeFileSync,rmSync,existsSync} from 'node:fs';
           import {tmpdir} from 'node:os';
           import {join} from 'node:path';
           import {setTimeout as delay} from 'node:timers/promises';
@@ -37,8 +36,8 @@ jobs:
           if(!out||process.getuid()===0)throw new Error('Explicit owned output and non-root browser required');
           mkdirSync(out,{recursive:false,mode:0o700});
           const root=mkdtempSync(join(tmpdir(),'ops-sam-read-'));const home=join(root,'home');mkdirSync(home);
-          const target='https://sam.gov/opp/8c0b487df44b45d0a7c6d97fcaa29b9f/view';
-          const report={schema:'ops099.public-sam-read/1',started_utc:new Date().toISOString(),target,status:'NOT_COMPLETED',requests:[],responses:[],errors:[],limits:['Signed-out public notice only. No login, click, form, account, model, application, credentials, anti-bot workaround or prior PDF redownload.','A returned page is not controlling-revision or applicant acceptance.']};
+          const target='https://sam.gov/opp/bdfe7a50582b4b0b81c03f2028bcf492/view';
+          const report={schema:'ops099.public-sam-read/2',started_utc:new Date().toISOString(),target,predecessor_run:39264019985,status:'NOT_COMPLETED',requests:[],responses:[],errors:[],limits:['Signed-out public notice only. No login, click, form, account, model, application, credentials, anti-bot workaround or prior PDF redownload.','Latest public listing is distinct from a guarantee about internal attachment revision labels or applicant acceptance.']};
           const browser=spawn('/opt/google/chrome/chrome',['--headless=new','--remote-debugging-pipe','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-default-apps','--disable-sync','--disable-extensions','--window-size=1280,960',`--user-data-dir=${join(root,'profile')}`,'about:blank'],{detached:true,stdio:['ignore','ignore','pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:home,TMPDIR:root,LANG:'C.UTF-8'}});
           let sequence=0,buffer=Buffer.alloc(0),closed=false,fatal=null,stderr='',session;
           const pending=new Map();const handlers=[];
@@ -47,14 +46,15 @@ jobs:
           function send(method,params={},sessionId){if(fatal||closed)return Promise.reject(fatal||new Error('Browser closed'));const id=++sequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout '+method));},10000);pending.set(id,{resolve,reject,timer});browser.stdio[3].write(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})})+'\0',e=>{if(e){clearTimeout(timer);pending.delete(id);reject(e);}});});}
           browser.stdio[4].on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);if(buffer.length>4*1024*1024){fatal=new Error('Bounded CDP buffer exceeded');browser.kill('SIGTERM');return;}let end;while((end=buffer.indexOf(0))>=0){const b=buffer.subarray(0,end);buffer=buffer.subarray(end+1);if(!b.length)continue;let e;try{e=JSON.parse(b.toString());}catch{fatal=new Error('Invalid CDP JSON');continue;}if(e.id&&pending.has(e.id)){const p=pending.get(e.id);clearTimeout(p.timer);pending.delete(e.id);e.error?p.reject(new Error(e.error.message)):p.resolve(e.result);}else for(const h of handlers)Promise.resolve(h(e)).catch(x=>{fatal=x;});}});
           async function value(expression){const r=await send('Runtime.evaluate',{expression,returnByValue:true},session);if(r.exceptionDetails)throw new Error('Read-only page evaluation failed');return r.result.value;}
-          async function body(){return await value('({url:location.href,title:document.title,text:document.body?.innerText.slice(0,22000)||"",links:Array.from(document.querySelectorAll("a[href]")).slice(0,120).map(a=>({text:a.innerText.trim().slice(0,180),href:(()=>{try{const u=new URL(a.href);return u.origin+u.pathname}catch{return "INVALID"}})()}))})');}
+          async function body(){return await value('({url:location.href,title:document.title,text:document.body?.innerText.slice(0,22000)||"",tables:Array.from(document.querySelectorAll("table")).slice(0,10).map(t=>t.innerText.slice(0,12000)),links:Array.from(document.querySelectorAll("a[href]")).slice(0,120).map(a=>({text:a.innerText.trim().slice(0,180),href:(()=>{try{const u=new URL(a.href);return ["https:","http:"].includes(u.protocol)?u.origin+u.pathname:"NON_HTTP"}catch{return "INVALID"}})()}))})');}
           try{
            report.browser=await send('Browser.getVersion');const t=await send('Target.createTarget',{url:'about:blank'});session=(await send('Target.attachToTarget',{targetId:t.targetId,flatten:true})).sessionId;await send('Page.enable',{},session);await send('Runtime.enable',{},session);await send('Network.enable',{},session);
            await send('Page.navigate',{url:'chrome://sandbox'},session);await delay(300);report.sandbox_text=await value('document.body.innerText');if(!/adequately sandboxed/i.test(report.sandbox_text)||!/Seccomp-BPF sandbox\s+Yes/i.test(report.sandbox_text))throw new Error('Sandbox not positively established; no public navigation');
            let requests=0;handlers.push(async e=>{if(e.sessionId!==session)return;if(e.method==='Network.responseReceived'){const q=e.params.response;try{const u=new URL(q.url);if(report.responses.length<100)report.responses.push({url:u.origin+u.pathname,status:q.status,mime:q.mimeType});}catch{}}if(e.method!=='Fetch.requestPaused')return;const q=e.params;let u;try{u=new URL(q.request.url);}catch{}requests++;const allowed=requests<=200&&u&&u.protocol==='https:'&&(u.hostname==='sam.gov'||u.hostname.endsWith('.sam.gov')||u.hostname==='gsa.gov'||u.hostname.endsWith('.gsa.gov'))&&['GET','HEAD'].includes(q.request.method)&&!/(?:\/login|\/signin|\/logout|\/oauth|\/token|\/delete)/i.test(u.pathname);if(report.requests.length<200)report.requests.push({method:q.request.method,url:u?u.origin+u.pathname:'INVALID',allowed:!!allowed});await send(allowed?'Fetch.continueRequest':'Fetch.failRequest',allowed?{requestId:q.requestId}:{requestId:q.requestId,errorReason:'BlockedByClient'},session);});
            await send('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},session);const nav=await send('Page.navigate',{url:target},session);if(nav.errorText)throw new Error('Navigation '+nav.errorText);
-           for(let i=0;i<20;i++){await delay(1000);if(fatal)throw fatal;try{const snapshot=await body();report.page=snapshot;if(/verify you are human|access denied|captcha|unusual traffic|you must sign in|please sign in to (?:view|access)|ERR_BLOCKED/i.test(snapshot.text)){report.status='STOPPED_AT_PUBLIC_ACCESS_OR_VERIFICATION_BARRIER';break;}if(snapshot.text.includes('HR001126S0011')&&snapshot.text.length>1000){report.status='PUBLIC_NOTICE_TEXT_RECEIVED';break;}}catch(e){if(closed)throw e;}}
-           if(report.status==='NOT_COMPLETED')report.status='NOTICE_CONTENT_NOT_ESTABLISHED_WITHIN_BOUND';
+           let previousText=null;
+           for(let i=0;i<20;i++){await delay(1000);if(fatal)throw fatal;try{const snapshot=await body();report.page=snapshot;if(/verify you are human|access denied|captcha|unusual traffic|you must sign in|please sign in to (?:view|access)|ERR_BLOCKED/i.test(snapshot.text)){report.status='STOPPED_AT_PUBLIC_ACCESS_OR_VERIFICATION_BARRIER';break;}if(snapshot.text.includes('HR001126S0011')&&snapshot.text.includes('Amendment-02.pdf')&&snapshot.text===previousText){report.status='PUBLIC_NOTICE_AND_ATTACHMENT_TABLE_RECEIVED';break;}previousText=snapshot.text;}catch(e){if(closed)throw e;}}
+           if(report.status==='NOT_COMPLETED')report.status='NOTICE_ATTACHMENT_CONTENT_NOT_ESTABLISHED_WITHIN_BOUND';
            try{const shot=await send('Page.captureScreenshot',{format:'jpeg',quality:55,captureBeyondViewport:false},session);const b=Buffer.from(shot.data,'base64');if(b.length>1500000)throw new Error('Screenshot bound');writeFileSync(join(out,'sam-notice-observed.jpg'),b,{flag:'wx'});report.screenshot={file:'sam-notice-observed.jpg',bytes:b.length,sha256:createHash('sha256').update(b).digest('hex'),visual_review:'PENDING_RETURN'};}catch(e){report.errors.push(e.message);}
           }catch(e){report.status='BLOCKED';report.errors.push(e.message);report.browser_stderr_tail=stderr;}
           finally{
@@ -65,7 +65,7 @@ jobs:
            report.owned_process_group_gone=Number.isInteger(browser.pid)&&browser.pid>1&&!alive();
            if(report.owned_process_group_gone){rmSync(root,{recursive:true,force:true});report.owned_profile_removed=!existsSync(root);}else report.errors.push('Owned process cleanup unverified');
            report.finished_utc=new Date().toISOString();writeFileSync(join(out,'RESULT.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.log('BEGIN_PUBLIC_SAM_RESULT');console.log(JSON.stringify(report,null,2));console.log('END_PUBLIC_SAM_RESULT');
-           if(report.status!=='PUBLIC_NOTICE_TEXT_RECEIVED'||!report.owned_process_group_gone)process.exitCode=2;
+           if(report.status!=='PUBLIC_NOTICE_AND_ATTACHMENT_TABLE_RECEIVED'||!report.owned_process_group_gone)process.exitCode=2;
           }
           JS
           node --check "$work/read_sam.mjs"
