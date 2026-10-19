@@ -1,18 +1,19 @@
-name: Exact official-source PDF receiving
+name: Exact official-source PDF comparison input
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/research-handoff-receiving.yml]
 permissions: {}
-# One public issuer attachment; no checkout, model, install, login, submission,
-# fleet route, private data, polling schedule, proxy, or credential forwarding.
+# One DISTINCT public issuer attachment. The previously received -02 file says
+# Amendment01 inside; retrieve -01 to compare, not repeat the completed download.
+# No checkout, model, install, login, submission, native PC, private data or schedule.
 jobs:
   receive-official-source:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Retrieve only the exact published amendment as inert bytes
+      - name: Retrieve only the exact earlier attachment as inert bytes
         shell: python
         env:
           OUTPUT_DIR: ${{ runner.temp }}/ops-official-source-return
@@ -20,27 +21,27 @@ jobs:
           import hashlib,json,os,pathlib,urllib.request
           from datetime import datetime,timezone
           root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
-          url='https://files.simpler.grants.gov/opportunities/4ec76651-17d7-47fd-ac5e-377e8673b3a4/attachments/53a3f369-bd2f-4380-a6aa-4fa884a33c75/HR001126S0011-Amendment-02.pdf'
-          report={'schema':'ops099.exact-official-source-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_listing':'https://simpler.grants.gov/opportunity/4ec76651-17d7-47fd-ac5e-377e8673b3a4','url':url,'scope':'Official public original bytes only; no application, qualification, registration, classified attachment, or malware-free claim.'}
+          url='https://files.simpler.grants.gov/opportunities/4ec76651-17d7-47fd-ac5e-377e8673b3a4/attachments/bc37d329-f65d-4c2a-b5cb-d3bf8f52193f/HR001126S0011-Amendment-01.pdf'
+          report={'schema':'ops099.exact-official-source-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_listing':'https://simpler.grants.gov/opportunity/4ec76651-17d7-47fd-ac5e-377e8673b3a4','url':url,'scope':'Distinct earlier official public original bytes for version comparison only; no application, qualification, classified material, or malware-free claim.'}
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self,*a,**k):raise RuntimeError('Unexpected redirect; not followed')
           request=urllib.request.Request(url,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
           with urllib.request.build_opener(NoRedirect).open(request,timeout=30) as response:
               content=response.read(5000001)
-              if response.status!=200 or response.geturl()!=url or not 1000<=len(content)<=5000000 or not content.startswith(b'%PDF-'):raise RuntimeError('Public response is not an admitted bounded PDF')
+              if response.status!=200 or response.geturl()!=url or not 1000<=len(content)<=5000000 or not content.startswith(b'%PDF-'):raise RuntimeError('Response is not an admitted bounded PDF')
               report.update(status='OFFICIAL_PDF_BYTES_RECEIVED',http_status=response.status,content_type=response.headers.get('Content-Type'),bytes=len(content),sha256=hashlib.sha256(content).hexdigest())
-          (root/'HR001126S0011-Amendment-02.pdf').write_bytes(content)
+          (root/'HR001126S0011-Amendment-01.pdf').write_bytes(content)
           report['finished_utc']=datetime.now(timezone.utc).isoformat()
           (root/'ACQUISITION.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
           manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
           (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
           print(json.dumps(report,indent=2))
-      - name: Return named public PDF and receipt for text and visual inspection
+      - name: Return named public PDF and original receipt
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ops-official-source-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/ops-official-source-return/HR001126S0011-Amendment-02.pdf
+            ${{ runner.temp }}/ops-official-source-return/HR001126S0011-Amendment-01.pdf
             ${{ runner.temp }}/ops-official-source-return/ACQUISITION.json
             ${{ runner.temp }}/ops-official-source-return/MANIFEST.json
           if-no-files-found: error
