@@ -1,35 +1,30 @@
-name: Public browser receiving check
+name: Public browser input and file return
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/public-browser-receiving.yml]
 permissions: {}
-# Purpose-specific source inspection; no package install, secrets, AI executor,
-# browser profile, public form submission, artifact storage, or native machine.
+# This is a fixed synthetic OFFLINE test, not a retry of the live site's HTTP403.
+# No Work/Codex/model API, native machine, checkout, new package, token export,
+# signed-in profile, public debug port, scheduler or artifact/cache storage.
+# Small public fixture files are returned through the job log with exact hashes.
 jobs:
-  brief-source:
+  browser-roundtrip:
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 3
     steps:
-      - name: Read the actual public brief module and form controls
-        shell: python
+      - name: Run exact reviewed source using sandboxed installed Chrome
+        shell: bash
         run: |
-          import hashlib,json,urllib.request
-          from html.parser import HTMLParser
-          base='https://ops-workflow-cost-calculator.rass991.chatgpt.site'
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,*a,**kw):raise RuntimeError('Unexpected redirect; no follow')
-          op=urllib.request.build_opener(NoRedirect)
-          class Controls(HTMLParser):
-              def handle_starttag(self,tag,attrs):
-                  if tag in {'input','textarea','select','option','button','form','label','output'}:
-                      print(tag,json.dumps(dict(attrs)))
-          for path in ['/agency-overflow','/spreadsheet-brief.mjs']:
-              with op.open(base+path,timeout=15) as r:
-                  b=r.read(100001)
-                  if r.status!=200 or len(b)>100000:raise RuntimeError('Status/size gate')
-              print('SOURCE',path,len(b),hashlib.sha256(b).hexdigest())
-              if path.endswith('.mjs'):
-                  if len(b)>24000:raise RuntimeError('Module output bound')
-                  print('BEGIN_PUBLIC_BRIEF_SOURCE');print(b.decode());print('END_PUBLIC_BRIEF_SOURCE')
-              else:Controls().feed(b.decode())
+          set -euo pipefail
+          test "$(id -u)" != 0
+          test -x /opt/google/chrome/chrome
+          dpkg-query -W -f='${Package} ${Version}\n' google-chrome-stable
+          dpkg -V google-chrome-stable
+          sha256sum /opt/google/chrome/chrome
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          curl --proto '=https' --tlsv1.2 --fail --connect-timeout 15 --max-time 30 --retry 0 'https://raw.githubusercontent.com/opsmark/Ops_missions/c6f07155671ba28732545acd865efcaf8e2494a4/isolated-tests/browser-input-download.mjs' -o "$work/test.mjs"
+          printf '%s  %s\n' 'afd18da48a783e827c6b33c2afbadc75cd2b8a2be22f94264cb8e61bf99a7ac8' "$work/test.mjs" | sha256sum --check --strict
+          node --check "$work/test.mjs"
+          timeout --signal=TERM --kill-after=5 110 node "$work/test.mjs"
