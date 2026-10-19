@@ -1,79 +1,60 @@
-name: Existing public research handoff receiving
+name: Exact official-source PDF receiving
 on:
   push:
     branches: [ops-forensics/admission-language-scan-20261018]
     paths: [.github/workflows/research-handoff-receiving.yml]
 permissions: {}
-# This is one exact public-asset receiving task, not a browser/service/controller.
-# No agency-page retry, account, model, checkout, package install or native PC.
+# One public issuer attachment; no checkout, model, install, login, submission,
+# fleet route, private data, polling schedule, proxy, or credential forwarding.
 jobs:
-  receive-original-package:
+  receive-official-source:
     if: github.repository == 'opsmark/Ops_missions'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Receive unchanged published ZIP and canonical reader without execution
+      - name: Retrieve only the exact published amendment as inert bytes
         shell: python
         env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-research-return
+          OUTPUT_DIR: ${{ runner.temp }}/ops-official-source-return
         run: |
-          import hashlib, io, json, os, pathlib, stat, urllib.request, zipfile
-          from datetime import datetime, timezone
-          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(exist_ok=False)
-          base='https://ops-workflow-cost-calculator.rass991.chatgpt.site/assets/research-brief-example/'
-          expected='8d72c285d2d19286f274e4601d1955d960ffa43af35749ad37bc9e9a5871a872'
-          report={'schema':'ops099.existing-research-original-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'reads':[],'scope':'Published existing files, not new client work or a source/virus/approval verdict.'}
+          import hashlib,json,os,pathlib,urllib.request
+          from datetime import datetime,timezone
+          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
+          url='https://files.simpler.grants.gov/opportunities/4ec76651-17d7-47fd-ac5e-377e8673b3a4/attachments/53a3f369-bd2f-4380-a6aa-4fa884a33c75/HR001126S0011-Amendment-02.pdf'
+          report={'schema':'ops099.exact-official-source-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_listing':'https://simpler.grants.gov/opportunity/4ec76651-17d7-47fd-ac5e-377e8673b3a4','url':url,'scope':'Official public original bytes only; no application, qualification, registration, classified attachment, or malware-free claim.'}
           class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,*args,**kwargs):raise RuntimeError('Unexpected redirect; stop without following')
-          op=urllib.request.build_opener(NoRedirect)
-          def get(url,cap):
-              req=urllib.request.Request(url,headers={'User-Agent':'OPS-public-artifact-receiving/1'},method='GET')
-              with op.open(req,timeout=20) as r:
-                  b=r.read(cap+1)
-                  if r.status!=200 or r.geturl()!=url or len(b)>cap:raise RuntimeError('HTTP status/size/identity gate')
-                  report['reads'].append({'url':url,'status':r.status,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest(),'content_type':r.headers.get('Content-Type')})
-                  return b
-          b=get(base+'research-brief-example.zip',200000)
-          if len(b)!=85292 or hashlib.sha256(b).hexdigest()!=expected:raise RuntimeError('Published package changed; no inspection or upload')
-          with zipfile.ZipFile(io.BytesIO(b)) as z:
-              info=z.infolist()
-              if {i.filename for i in info}!={'index.html','summary.pdf','sourced-rows.csv','READ_FIRST.txt','research-brief.xlsx'} or len(info)!=5:raise RuntimeError('Unexpected member set')
-              if sum(i.file_size for i in info)>1000000:raise RuntimeError('Expanded size bound')
-              if any(i.flag_bits&1 or stat.S_ISLNK(i.external_attr>>16) for i in info):raise RuntimeError('Encrypted or symlink member')
-              if z.testzip() is not None:raise RuntimeError('CRC failure')
-          (root/'research-brief-example.original.zip').write_bytes(b)
-          try:
-              h=get(base,100000)
-              (root/'public-reader.original.html').write_bytes(h)
-          except Exception as e:
-              report['reader_unavailable']=str(e)
+              def redirect_request(self,*a,**k):raise RuntimeError('Unexpected redirect; not followed')
+          request=urllib.request.Request(url,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
+          with urllib.request.build_opener(NoRedirect).open(request,timeout=30) as response:
+              content=response.read(5000001)
+              if response.status!=200 or response.geturl()!=url or not 1000<=len(content)<=5000000 or not content.startswith(b'%PDF-'):raise RuntimeError('Public response is not an admitted bounded PDF')
+              report.update(status='OFFICIAL_PDF_BYTES_RECEIVED',http_status=response.status,content_type=response.headers.get('Content-Type'),bytes=len(content),sha256=hashlib.sha256(content).hexdigest())
+          (root/'HR001126S0011-Amendment-02.pdf').write_bytes(content)
           report['finished_utc']=datetime.now(timezone.utc).isoformat()
-          report['status']='EXACT_EXISTING_ZIP_RECEIVED'
           (root/'ACQUISITION.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
           manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
           (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
           print(json.dumps(report,indent=2))
-      - name: Return only named public files for actual receiving inspection
+      - name: Return named public PDF and receipt for text and visual inspection
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: ops-existing-research-originals-${{ github.run_id }}
+          name: ops-official-source-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/ops-research-return/research-brief-example.original.zip
-            ${{ runner.temp }}/ops-research-return/public-reader.original.html
-            ${{ runner.temp }}/ops-research-return/ACQUISITION.json
-            ${{ runner.temp }}/ops-research-return/MANIFEST.json
+            ${{ runner.temp }}/ops-official-source-return/HR001126S0011-Amendment-02.pdf
+            ${{ runner.temp }}/ops-official-source-return/ACQUISITION.json
+            ${{ runner.temp }}/ops-official-source-return/MANIFEST.json
           if-no-files-found: error
           retention-days: 1
           include-hidden-files: false
           overwrite: false
-      - name: Remove only the owned receiving directory
+      - name: Remove only this owned directory
         if: always()
         shell: python
         env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-research-return
+          OUTPUT_DIR: ${{ runner.temp }}/ops-official-source-return
         run: |
-          import os, pathlib, shutil
+          import os,pathlib,shutil
           p=pathlib.Path(os.environ['OUTPUT_DIR'])
           if p.exists():shutil.rmtree(p)
-          if p.exists():raise RuntimeError('Owned-directory cleanup failed')
-          print('Owned receiving directory removed; no other paths touched')
+          if p.exists():raise RuntimeError('Cleanup unverified')
+          print('Owned receiving directory removed')
