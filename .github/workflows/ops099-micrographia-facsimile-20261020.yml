@@ -1,0 +1,53 @@
+name: OPS099 Micrographia 1665 complete original facsimile
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/ops099-micrographia-facsimile-20261020.yml]
+permissions: {}
+jobs:
+  receive-facsimile:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - name: Receive identified public-domain scan without executing source
+        shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops099_micrographia_facsimile
+        run: |
+          import os,pathlib,urllib.request,urllib.parse,hashlib,sys,json
+          from datetime import datetime,timezone
+          p=pathlib.Path(os.environ['OUTPUT_DIR']);p.mkdir(mode=0o700,exist_ok=False)
+          source='https://archive.org/download/b30326370/b30326370.pdf'
+          rec={'source_url':source,'catalogue':'https://wellcomecollection.org/works/apmaw56u','independent_evidence':'https://commons.wikimedia.org/wiki/File:Micrographia-_or_some_physiological_descriptions_of_minute_bodies_made_by_magnifying_glasses._With_observations_and_inquiries_thereupon_(IA_b30326370).pdf','expected_bytes':50225425,'expected_sha1':'022efaa2978d639cab9d753ff6f3a9fcfec12907','status':'HOLD','timestamp_utc':datetime.now(timezone.utc).isoformat()}
+          class Redirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,req,fp,code,msg,headers,newurl):
+                  u=urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url,newurl));h=u.hostname or ''
+                  allowed=u.scheme=='https' and not u.username and not u.password and (h=='archive.org' or h.endswith('.archive.org'))
+                  if not allowed:raise RuntimeError('Non-issuer redirect refused')
+                  return urllib.request.Request(u.geturl(),headers={'User-Agent':'OPS-Public-Domain-Historical-Archive/1'},method='GET')
+          try:
+              with urllib.request.build_opener(Redirect).open(urllib.request.Request(source,headers={'User-Agent':'OPS-Public-Domain-Historical-Archive/1'}),timeout=95) as r:
+                  rec['http_status']=r.status;rec['final_url_host']=urllib.parse.urlsplit(r.geturl()).hostname
+                  b=r.read(55000001)
+              if r.status!=200 or len(b)>55000000 or not b.startswith(b'%PDF-') or b'%%EOF' not in b[-2048:]:raise RuntimeError('Bounded PDF admission failed')
+              rec.update(bytes=len(b),sha1=hashlib.sha1(b).hexdigest(),sha256=hashlib.sha256(b).hexdigest())
+              rec['matches_commons_2020_original']=len(b)==rec['expected_bytes'] and rec['sha1']==rec['expected_sha1']
+              if not rec['matches_commons_2020_original']:raise RuntimeError('Source bytes differ from documented Commons copy; retain hold, not verified scan')
+              (p/'Micrographia_1665_Wellcome_IA_b30326370_original.pdf').write_bytes(b)
+              rec['status']='ORIGINAL_384_PAGE_PDF_BYTES_VERIFIED'
+          except Exception as e:rec['reason']=type(e).__name__+': '+str(e)[:240]
+          (p/'SOURCE_RECEIPT.json').write_text(json.dumps(rec,indent=2)+'\n')
+          print(json.dumps(rec,indent=2))
+          if rec['status']!='ORIGINAL_384_PAGE_PDF_BYTES_VERIFIED':sys.exit(2)
+      - name: Return original source and any explicit block
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ops099-micrographia-1665-${{ github.run_id }}
+          path: ${{ runner.temp }}/ops099_micrographia_facsimile/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove only owned artifacts
+        if: always()
+        run: rm -rf -- "${{ runner.temp }}/ops099_micrographia_facsimile"
