@@ -1,0 +1,72 @@
+name: OPS099 finite publisher-illustrations return
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/ops099-occult-plates-source-20261020.yml]
+permissions: {}
+# One public US-PD historical source. No accounts, model, personal data,
+# scraping defenses, executable installation, publication or native device.
+jobs:
+  source:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Recover exact publisher HTML with original illustration bytes
+        shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops099-occult-source
+        run: |
+          import os,io,zipfile,json,hashlib,pathlib,stat,urllib.request,urllib.parse,sys
+          from datetime import datetime,timezone
+          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
+          url='https://www.gutenberg.org/cache/epub/16058/pg16058-h.zip'
+          r={'source_url':url,'source_title':'Occult Chemistry - PG16058 revised 1919 edition (not original 1908)','timestamp_utc':datetime.now(timezone.utc).isoformat(),'status':'HOLD','limits':['Original publisher ZIP only','Archive ZIP contents are source data, never executed','US public domain asserted by publisher; international reuse is separate','No current scientific endorsement of clairvoyance or etheric-element claims']}
+          class OnlyGutenberg(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,req,fp,code,msg,headers,newurl):
+                  u=urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url,newurl))
+                  if u.scheme!='https' or u.hostname not in ('www.gutenberg.org','gutenberg.org') or u.username or u.password:raise RuntimeError('Unapproved redirect blocked')
+                  return urllib.request.Request(u.geturl(),headers={'User-Agent':'OPS-source-recovery/1'},method='GET')
+          try:
+              with urllib.request.build_opener(OnlyGutenberg).open(urllib.request.Request(url,headers={'User-Agent':'OPS-source-recovery/1'}),timeout=30) as res:
+                  b=res.read(15000001)
+                  if res.status!=200 or len(b)>15000000 or len(b)<20000 or not b.startswith(b'PK\x03\x04'):raise RuntimeError('Size or ZIP framing admission failed')
+                  r.update(http_status=res.status,bytes=len(b),sha256=hashlib.sha256(b).hexdigest(),final_url=res.geturl())
+              with zipfile.ZipFile(io.BytesIO(b)) as z:
+                  infos=z.infolist()
+                  if not 5<=len(infos)<=500 or sum(i.file_size for i in infos)>40000000:raise RuntimeError('Unbounded ZIP members')
+                  seen=set()
+                  for i in infos:
+                      p=pathlib.PurePosixPath(i.filename)
+                      if p.is_absolute() or '..' in p.parts or ':' in i.filename or '\\' in i.filename or i.flag_bits&1 or stat.S_ISLNK(i.external_attr>>16) or i.filename.casefold() in seen:raise RuntimeError('Unsafe member name')
+                      seen.add(i.filename.casefold())
+                  if z.testzip() is not None:raise RuntimeError('CRC failure')
+                  images=[i.filename for i in infos if i.filename.lower().endswith(('.png','.jpg','.jpeg','.gif','.svg'))]
+                  htmls=[i.filename for i in infos if i.filename.lower().endswith(('.html','.htm'))]
+                  if not images or not htmls:raise RuntimeError('Illustrated HTML source not established')
+                  r.update(status='ORIGINAL_ILLUSTRATED_ZIP_RECEIVED',members=len(infos),image_count=len(images),image_members=images,html_members=htmls)
+              (root/'PG16058_Original_Illustrated_HTML.zip').write_bytes(b)
+          except Exception as e:r.update(error_type=type(e).__name__,error_detail=str(e)[:150])
+          (root/'ACQUISITION.json').write_text(json.dumps(r,indent=2)+'\n',encoding='utf-8')
+          man={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
+          (root/'MANIFEST.json').write_text(json.dumps(man,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(r,indent=2))
+          if r['status']!='ORIGINAL_ILLUSTRATED_ZIP_RECEIVED':sys.exit(2)
+      - name: Return only publisher originals and receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ops099-occult-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/ops099-occult-source/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove own temporary directory
+        if: always()
+        shell: python
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops099-occult-source
+        run: |
+          import os,pathlib,shutil
+          p=pathlib.Path(os.environ['OUTPUT_DIR'])
+          if p.exists():shutil.rmtree(p)
+          if p.exists():raise RuntimeError('Owned-source cleanup failed')
