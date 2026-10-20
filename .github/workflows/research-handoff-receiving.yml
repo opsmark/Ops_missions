@@ -1,86 +1,16 @@
-name: Receive exact public IPTO templates
+# RETIRED COMPLETE — OPS099 finite receiving lane; do not run again unchanged.
+# Previous actual observation: https://github.com/opsmark/Ops_missions/actions/runs/39354218933
+# IPTO templates original evidence remains in private OPS Continuity source package.
+# This workflow no longer has a push trigger; its no-op manual job also refuses work.
+# Reopen only against a NEW bounded source or explicit receiving requirement under
+# existing owner after current approval, release, privacy, budget and source checks.
+name: Closed OPS099 IPTO templates receiving
 on:
-  push:
-    branches: [ops-forensics/admission-language-scan-20261018]
-    paths: [.github/workflows/research-handoff-receiving.yml]
+  workflow_dispatch:
 permissions: {}
-# Two unclassified publicly listed templates already observed in the existing
-# attachment table. No application, model, credentials, checkout or installation.
 jobs:
-  templates:
-    if: github.repository == 'opsmark/Ops_missions'
+  retained-nonexecuting-marker:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
     steps:
-      - name: Receive original bytes without extracting or executing members
-        shell: python
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-template-return
-        run: |
-          import hashlib,io,json,os,pathlib,stat,sys,urllib.request,urllib.parse,zipfile
-          from datetime import datetime,timezone
-          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
-          listing='https://sam.gov/opp/bdfe7a50582b4b0b81c03f2028bcf492/view#attachments-links'
-          items=[('IPTO_OW_Abstract_Template__Required_.docx','fec335d6fc4b4d8da293c4acdb176490',2000000),('IPTO_OW_Proposal_Templates.zip','d87b4b8b1116400dbc85aef269e65d8e',4000000)]
-          records=[]
-          for name,resource,cap in items:
-              url='https://sam.gov/api/prod/opps/v3/opportunities/resources/files/'+resource+'/download'
-              rec={'name':name,'url':url,'source_listing':listing,'checked_utc':datetime.now(timezone.utc).isoformat(),'redirects':[],'status':'NOT_RECEIVED'}
-              class Redirects(urllib.request.HTTPRedirectHandler):
-                  def redirect_request(self,req,fp,code,msg,headers,newurl):
-                      dest=urllib.parse.urljoin(req.full_url,newurl);u=urllib.parse.urlsplit(dest);host=u.hostname or ''
-                      ok=u.scheme=='https' and not u.username and not u.password and (host=='sam.gov' or host.endswith('.sam.gov') or host.endswith('.amazonaws.com')) and len(rec['redirects'])<2
-                      rec['redirects'].append({'status':code,'host':host,'allowed':ok})
-                      if not ok:raise RuntimeError('Unadmitted redirect')
-                      return urllib.request.Request(dest,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
-              try:
-                  req=urllib.request.Request(url,headers={'User-Agent':'OPS-public-source-receiving/1'},method='GET')
-                  with urllib.request.build_opener(Redirects).open(req,timeout=20) as r:
-                      b=r.read(cap+1)
-                      if r.status!=200 or len(b)>cap or not b.startswith(b'PK\x03\x04'):raise RuntimeError('Bounded ZIP or OOXML admission failed')
-                      rec.update(http_status=r.status,content_type=r.headers.get('Content-Type'),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
-                  with zipfile.ZipFile(io.BytesIO(b)) as z:
-                      infos=z.infolist()
-                      if len(infos)>200 or sum(i.file_size for i in infos)>25000000:raise RuntimeError('Archive bounds')
-                      seen=set()
-                      for i in infos:
-                          p=pathlib.PurePosixPath(i.filename)
-                          if p.is_absolute() or '..' in p.parts or '\\' in i.filename or ':' in i.filename or i.flag_bits&1 or stat.S_ISLNK(i.external_attr>>16) or i.filename.casefold() in seen:raise RuntimeError('Member admission')
-                          seen.add(i.filename.casefold())
-                      if z.testzip():raise RuntimeError('CRC failed')
-                      rec['members']=[{'name':i.filename,'bytes':i.file_size} for i in infos]
-                  (root/name).write_bytes(b);rec['status']='ORIGINAL_BYTES_RECEIVED_NOT_EXECUTED'
-              except Exception as e:
-                  rec.update(status='SOURCE_HOLD',error_type=type(e).__name__)
-                  if hasattr(e,'code'):rec['http_status']=e.code
-              records.append(rec)
-          (root/'ACQUISITION.json').write_text(json.dumps(records,indent=2)+'\n',encoding='utf-8')
-          manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir() if p.is_file()}
-          (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
-          print(json.dumps(records,indent=2))
-          if not all(r['status']=='ORIGINAL_BYTES_RECEIVED_NOT_EXECUTED' for r in records):sys.exit(2)
-      - name: Return only public originals and exact receipts
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: ops-public-templates-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/ops-template-return/IPTO_OW_Abstract_Template__Required_.docx
-            ${{ runner.temp }}/ops-template-return/IPTO_OW_Proposal_Templates.zip
-            ${{ runner.temp }}/ops-template-return/ACQUISITION.json
-            ${{ runner.temp }}/ops-template-return/MANIFEST.json
-          if-no-files-found: error
-          retention-days: 1
-          include-hidden-files: false
-          overwrite: false
-      - name: Remove only owned receiving files
-        if: always()
-        shell: python
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-template-return
-        run: |
-          import os,pathlib,shutil
-          p=pathlib.Path(os.environ['OUTPUT_DIR'])
-          if p.exists():shutil.rmtree(p)
-          if p.exists():raise RuntimeError('Owned cleanup failed')
-          print('Owned receiving files removed')
+      - run: echo 'Closed source read. See historical run receipts.'
