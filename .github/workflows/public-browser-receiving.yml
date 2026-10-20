@@ -1,89 +1,16 @@
-name: Read visible SAM attachments section
+# RETIRED COMPLETE — OPS099 finite receiving lane; do not run again unchanged.
+# Previous actual observation: https://github.com/opsmark/Ops_missions/actions/runs/39339406323
+# SAM attachment browsing original evidence remains in private OPS Continuity source package.
+# This workflow no longer has a push trigger; its no-op manual job also refuses work.
+# Reopen only against a NEW bounded source or explicit receiving requirement under
+# existing owner after current approval, release, privacy, budget and source checks.
+name: Closed OPS099 SAM attachment browsing receiving
 on:
-  push:
-    branches: [ops-forensics/admission-language-scan-20261018]
-    paths: [.github/workflows/public-browser-receiving.yml]
+  workflow_dispatch:
 permissions: {}
-# One changed read step: use observed Attachments/Links navigation for the
-# incomplete public attachment section, not another silent wait or download.
-# Reuse exact already-reviewed own script from immutable commit. No AI, account,
-# install, credentials, private input, unrelated request, or native PC access.
 jobs:
-  public-notice:
-    if: github.repository == 'opsmark/Ops_missions'
+  retained-nonexecuting-marker:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
     steps:
-      - name: Reuse pinned source and read the public attachments section
-        shell: bash
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
-        run: |
-          set -euo pipefail
-          test "$(id -u)" != 0
-          test -x /opt/google/chrome/chrome
-          dpkg-query -W -f='${Package} ${Version}\n' google-chrome-stable
-          dpkg -V google-chrome-stable
-          sha256sum /opt/google/chrome/chrome
-          work="$(mktemp -d)"
-          trap 'rm -rf -- "$work"' EXIT
-          export OWN_SCRIPT_DIR="$work"
-          python - <<'PY'
-          import os,pathlib,urllib.request,hashlib,textwrap
-          url='https://raw.githubusercontent.com/opsmark/Ops_missions/5b863063bd006b16debb07cec00ec64fca3d9cd0/.github/workflows/public-browser-receiving.yml'
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,*a,**k):raise RuntimeError('Unexpected source redirect')
-          with urllib.request.build_opener(NoRedirect).open(url,timeout=20) as r:
-              b=r.read(30001)
-              if r.status!=200 or r.geturl()!=url or len(b)>30000:raise RuntimeError('Source admission failed')
-          gitblob=hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
-          if gitblob!='28cfadfdd2ef4b6a668c2a510750a80c8e5f6f46':raise RuntimeError('Reviewed source drift')
-          t=b.decode('utf-8')
-          start="          cat > \"$work/read_sam.mjs\" <<'JS'\n"
-          end='          JS\n'
-          if t.count(start)!=1 or t.count(end)!=1:raise RuntimeError('Ambiguous source markers')
-          js=textwrap.dedent(t.split(start,1)[1].split(end,1)[0])
-          needle=' let previousText=null;'
-          if js.count(needle)!=1:raise RuntimeError('Action insertion point mismatch')
-          action="""
-           await delay(1500);
-           report.attachment_navigation=await value(`(()=>{
-             const matches=Array.from(document.querySelectorAll('a,button,[role=link],[role=button]')).filter(e=>e.innerText?.trim()==='Attachments/Links');
-             if(matches.length!==1)return {state:'EXACT_VISIBLE_NAV_NOT_UNIQUE',matches:matches.length};
-             const e=matches[0];const r=e.getBoundingClientRect();
-             if(!r.width||!r.height||e.disabled)return {state:'NAV_NOT_VISIBLE_OR_ENABLED'};
-             e.click();return {state:'VISIBLE_ATTACHMENTS_NAV_CLICKED',tag:e.tagName,text:e.innerText.trim()};
-           })()`);
-           let previousText=null;
-          """
-          js=js.replace(needle,textwrap.dedent(action),1)
-          p=pathlib.Path(os.environ['OWN_SCRIPT_DIR'])/'read_sam.mjs'
-          p.write_text(js,encoding='utf-8')
-          print('REUSED_REVIEWED_SOURCE_GIT_BLOB',gitblob)
-          print('EXECUTED_SOURCE_SHA256',hashlib.sha256(js.encode()).hexdigest())
-          PY
-          node --check "$work/read_sam.mjs"
-          timeout --signal=TERM --kill-after=5 100 node "$work/read_sam.mjs"
-      - name: Return actual bounded public observation, including any hold
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: ops-public-sam-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/ops-sam-output/RESULT.json
-            ${{ runner.temp }}/ops-sam-output/sam-notice-observed.jpg
-          if-no-files-found: error
-          retention-days: 1
-          include-hidden-files: false
-          overwrite: false
-      - name: Remove only owned output
-        if: always()
-        shell: python
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops-sam-output
-        run: |
-          import os,pathlib,shutil
-          p=pathlib.Path(os.environ['OUTPUT_DIR'])
-          if p.exists():shutil.rmtree(p)
-          if p.exists():raise RuntimeError('Owned output cleanup failed')
-          print('Owned receiving outputs removed')
+      - run: echo 'Closed source read. See historical run receipts.'
