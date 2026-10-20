@@ -1,0 +1,70 @@
+name: OPS099 historical Hebrew 1914 facsimile
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/ops099-gollancz-1914-facsimile-20261020.yml]
+permissions: {}
+jobs:
+  source:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Read identified 1914 public original as inert bytes
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops099_gollancz
+        run: |
+          set -euo pipefail
+          cat > /tmp/ops099_gollancz.py <<'PY'
+          import os,pathlib,urllib.request,urllib.parse,json,hashlib,sys,zipfile
+          from datetime import datetime,timezone
+          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
+          item='sefermafteashelo00golluoft'
+          metadata_url='https://archive.org/metadata/'+item
+          result={'schema':'ops099.gollancz-1914/1','checked_utc':datetime.now(timezone.utc).isoformat(),'item':item,'work':'Hermann Gollancz, Sepher Maphteah Shelomo, OUP 1914','edition_source':'https://wellcomecollection.org/works/g9mk6dtk','status':'SOURCE_HOLD'}
+          class Redirect(urllib.request.HTTPRedirectHandler):
+           def redirect_request(self,req,fp,code,msg,headers,newurl):
+            u=urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url,newurl));h=u.hostname or ''
+            if u.scheme!='https' or u.username or u.password or not (h=='archive.org' or h.endswith('.archive.org')):raise RuntimeError('Disallowed download redirect')
+            return urllib.request.Request(u.geturl(),headers={'User-Agent':'OPS-Historical-Primary-Source-Receiving/1'},method='GET')
+          opener=urllib.request.build_opener(Redirect)
+          try:
+           with opener.open(metadata_url,timeout=30) as r:data=r.read(1500001)
+           if len(data)>1500000:raise RuntimeError('Metadata size limit')
+           d=json.loads(data)
+           (root/'ORIGINAL_ITEM_METADATA.json').write_bytes(data)
+           candidates=[f for f in d.get('files',[]) if f.get('name','').lower().endswith('.pdf') and str(f.get('size','0')).isdigit() and int(f.get('size','0'))<=75000000]
+           result['pdf_options']=[{'name':x['name'],'bytes':x.get('size'),'source':x.get('source')} for x in candidates][:20]
+           # Prefer the exact identifier PDF; it contains the full scanned original.
+           candidates.sort(key=lambda f:(f.get('name')!=item+'.pdf',f.get('source')!='original',int(f.get('size',0))))
+           if not candidates:raise RuntimeError('No qualified bounded PDF')
+           chosen=candidates[0];name=chosen['name']
+           u='https://archive.org/download/'+item+'/'+urllib.parse.quote(name)
+           with opener.open(u,timeout=95) as r:b=r.read(75000001);result['http_status']=r.status
+           if len(b)>75000000 or not b.startswith(b'%PDF-') or b'%%EOF' not in b[-2048:]:raise RuntimeError('PDF framing or size hold')
+           digest=hashlib.sha1(b).hexdigest();known=str(chosen.get('sha1','')).lower()
+           result.update(filename=name,bytes=len(b),sha1=digest,sha256=hashlib.sha256(b).hexdigest(),metadata_sha1=known,metadata_byte_count=chosen.get('size'))
+           if known and known!=digest:raise RuntimeError('Publisher metadata checksum mismatch')
+           if int(chosen.get('size',len(b)))!=len(b):raise RuntimeError('Publisher metadata size mismatch')
+           (root/'Gollancz_1914_original_facsimile.pdf').write_bytes(b)
+           result['status']='PDF_BYTES_RECEIVED_PAGE_INSPECTION_PENDING'
+          except Exception as e:result['reason']=type(e).__name__+': '+str(e)[:180]
+          (root/'RECEIPT.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          
+          PY
+          python -I -B /tmp/ops099_gollancz.py
+      - name: Return exact results or bounded hold
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ops099-gollancz-${{ github.run_id }}
+          path: ${{ runner.temp }}/ops099_gollancz/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Clean only owned paths
+        if: always()
+        run: |
+          rm -rf -- "${{ runner.temp }}/ops099_gollancz"
+          rm -f -- /tmp/ops099_gollancz.py
