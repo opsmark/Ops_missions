@@ -1,83 +1,16 @@
-name: OPS099 exact public-domain book source byte return
+# Finite OPS099 source acquisition finished 2026-10-20, exact run 39378979939.
+# Frazer third-edition XII original 2,346,968 bytes successfully received.
+# Boy Mechanic illustrated EPUBs held, not to be retried unchanged.
+# Original source workflow retained in Git history at ae5d6e2256f15096e94ee3e3c8c2d4d1cf8945ff.
+# One-shot source results in /Network/Source_Giver_Vault_2026-10-13/Acquisition_Run_2026-10-14/
+# No push/manual run trigger. Reopen only for a distinct admitted task via current owner.
+name: OPS099 book-source receiving closed
 on:
-  push:
-    branches: [ops-forensics/admission-language-scan-20261018]
-    paths: [.github/workflows/ops099-book-source-receive-20261020.yml]
+  workflow_dispatch:
 permissions: {}
-# One finite, exact-source public-domain recovery task.
-# Explicitly not an assistant, scheduler, account login, customer data, or application.
 jobs:
-  source-return:
-    if: github.repository == 'opsmark/Ops_missions'
+  closed:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
     steps:
-      - name: Get only three approved publisher files as inert bytes
-        shell: python
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops099-book-source
-        run: |
-          import hashlib,io,json,os,pathlib,stat,urllib.parse,urllib.request,zipfile
-          from datetime import datetime,timezone
-          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
-          entries=[
-            ('Frazer_Golden_Bough_ThirdEd_Vol12_PG44772.txt','https://www.gutenberg.org/cache/epub/44772/pg44772.txt',5500000,'text'),
-            ('Boy_Mechanic_Vol1_PG12655_images.epub','https://www.gutenberg.org/ebooks/12655.epub3.images',15000000,'epub'),
-            ('Boy_Mechanic_Book2_PG44585_images.epub','https://www.gutenberg.org/ebooks/44585.epub3.images',15000000,'epub')
-          ]
-          report={'schema':'ops099.book-source-byte-receiving/1','started_utc':datetime.now(timezone.utc).isoformat(),'source_publisher':'Project Gutenberg','contents':[],'limits':['Public-domain USA classification from PG, not an international grant','No file execution, extraction to filesystem, software installation or malware clearance','Historical formulas, hazardous chemicals and equipment are not modern-safe procedures']}
-          class Redirector(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,req,fp,code,msg,headers,newurl):
-                  u=urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url,newurl))
-                  if u.scheme!='https' or u.hostname not in ('www.gutenberg.org','gutenberg.org') or u.username or u.password:raise RuntimeError('Non-PG redirect blocked')
-                  return urllib.request.Request(u.geturl(),headers={'User-Agent':'OPS-public-book-source/1'},method='GET')
-          for name,url,limit,typ in entries:
-              item={'file':name,'url':url,'status':'HOLD','format':typ}
-              try:
-                  with urllib.request.build_opener(Redirector).open(urllib.request.Request(url,headers={'User-Agent':'OPS-public-book-source/1'}),timeout=35) as res:
-                      data=res.read(limit+1)
-                      if res.status!=200 or len(data)>limit or len(data)<10000:raise RuntimeError('HTTP, size, or completeness bound')
-                      item['http_status']=res.status;item['final_url']=res.geturl();item['bytes']=len(data);item['sha256']=hashlib.sha256(data).hexdigest()
-                  if typ=='text':
-                      sample=data.decode('utf-8-sig','replace')
-                      if not ('GUTENBERG' in sample[:5000].upper() and 'GUTENBERG' in sample[-5000:].upper() and 'BIBLIOGRAPHY' in sample.upper()[-1000000:]):raise RuntimeError('Text framing/index not established')
-                      item['lines']=sample.count('\n')+1
-                  else:
-                      if not data.startswith(b'PK\x03\x04'):raise RuntimeError('Not a ZIP-based EPUB')
-                      with zipfile.ZipFile(io.BytesIO(data)) as z:
-                          files=z.infolist()
-                          if not 3<=len(files)<=1500 or sum(f.file_size for f in files)>80000000:raise RuntimeError('EPUB bounds')
-                          if z.testzip() is not None:raise RuntimeError('EPUB CRC failure')
-                          for f in files:
-                              p=pathlib.PurePosixPath(f.filename)
-                              if p.is_absolute() or '..' in p.parts or ':' in f.filename or '\\' in f.filename or stat.S_ISLNK(f.external_attr>>16):raise RuntimeError('Unsafe EPUB member name')
-                          item['members']=len(files);item['image_members']=sum(f.filename.lower().endswith(('.png','.jpg','.jpeg','.svg','.gif')) for f in files)
-                          if item['image_members']<8:raise RuntimeError('Illustrated edition not established')
-                  (root/name).write_bytes(data);item['status']='SOURCE_BYTES_RECEIVED'
-              except Exception as e:item['error']=type(e).__name__+': '+str(e)[:180]
-              report['contents'].append(item)
-          report['finished_utc']=datetime.now(timezone.utc).isoformat()
-          (root/'ACQUISITION.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
-          manifest={p.name:{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in root.iterdir()}
-          (root/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
-          print(json.dumps(report,indent=2))
-      - name: Return exactly bounded source results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: ops099-book-byte-source-${{ github.run_id }}
-          path: ${{ runner.temp }}/ops099-book-source/
-          if-no-files-found: error
-          retention-days: 1
-          include-hidden-files: false
-      - name: Remove only own files
-        if: always()
-        shell: python
-        env:
-          OUTPUT_DIR: ${{ runner.temp }}/ops099-book-source
-        run: |
-          import os,pathlib,shutil
-          p=pathlib.Path(os.environ['OUTPUT_DIR'])
-          if p.exists():shutil.rmtree(p)
-          if p.exists():raise RuntimeError('Cleanup failed')
-          print('Owned temporary sources removed')
+      - run: echo 'Finite reading-source retrieval closed.'
