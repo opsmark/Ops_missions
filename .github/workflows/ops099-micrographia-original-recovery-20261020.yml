@@ -1,0 +1,83 @@
+name: OPS099 Micrographia 1665 source recovery
+on:
+  push:
+    branches: [ops-forensics/admission-language-scan-20261018]
+    paths: [.github/workflows/ops099-micrographia-original-recovery-20261020.yml]
+permissions: {}
+jobs:
+  receive:
+    if: github.repository == 'opsmark/Ops_missions'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Receive bounded public originals, no installation or execution
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/ops099_micrographia_originals
+        run: |
+          set -euo pipefail
+          cat > /tmp/ops_micrographia_read.py <<'PY'
+          import pathlib,os,hashlib,json,urllib.request,urllib.parse,zipfile,io,stat,sys,re
+          from datetime import datetime,timezone
+          root=pathlib.Path(os.environ['OUTPUT_DIR']);root.mkdir(mode=0o700,exist_ok=False)
+          sources=[
+            ('gutenberg_illustrated','https://www.gutenberg.org/cache/epub/15491/pg15491-h.zip',18000000),
+            ('bhl_1665_tab_viii','https://www.biodiversitylibrary.org/pageimage/786459',16000000),
+            ('wellcome_catalogue','https://api.wellcomecollection.org/catalogue/v2/works/apmaw56u',1000000)
+          ]
+          out={'record':'OPS099-MICROGRAPHIA-SOURCE-RECEIPT-20261020','source_links':['https://wellcomecollection.org/works/apmaw56u','https://www.biodiversitylibrary.org/item/15485','https://www.gutenberg.org/ebooks/15491'],'items':[],'checked_utc':datetime.now(timezone.utc).isoformat()}
+          class Redirect(urllib.request.HTTPRedirectHandler):
+           def redirect_request(self,req,fp,code,msg,headers,newurl):
+            u=urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url,newurl));h=u.hostname or ''
+            if u.scheme!='https' or not (h in ('www.gutenberg.org','gutenberg.org','www.biodiversitylibrary.org','biodiversitylibrary.org','api.wellcomecollection.org','www.wellcomecollection.org') or h.endswith('.biodiversitylibrary.org')):raise ValueError('Non-allowlisted redirect')
+            return urllib.request.Request(u.geturl(),headers={'User-Agent':'OPS-Public-Archive-Source-Review/1'},method='GET')
+          opener=urllib.request.build_opener(Redirect)
+          for name,url,cap in sources:
+           rec={'name':name,'url':url,'state':'HOLD'}
+           try:
+            req=urllib.request.Request(url,headers={'User-Agent':'OPS-Public-Archive-Source-Review/1'},method='GET')
+            with opener.open(req,timeout=35) as res:
+             data=res.read(cap+1)
+             rec.update(http_status=res.status,media_type=res.headers.get('Content-Type'),final_url=res.geturl())
+            if len(data)>cap or len(data)<100:raise ValueError('Response bound')
+            rec.update(size_bytes=len(data),sha256=hashlib.sha256(data).hexdigest())
+            if name=='gutenberg_illustrated':
+             if not data[:4]==b'PK\x03\x04':raise ValueError('Not ZIP')
+             with zipfile.ZipFile(io.BytesIO(data)) as z:
+              infos=z.infolist()
+              if len(infos)>450 or sum(i.file_size for i in infos)>65000000:raise ValueError('ZIP limit')
+              if z.testzip():raise ValueError('CRC fail')
+              for i in infos:
+               p=pathlib.PurePosixPath(i.filename)
+               if p.is_absolute() or '..' in p.parts or i.flag_bits&1 or stat.S_ISLNK(i.external_attr>>16) or '\\' in i.filename:raise ValueError('ZIP entry')
+              rec['members']=len(infos)
+              rec['image_members']=[i.filename for i in infos if i.filename.lower().endswith(('.png','.jpg','.jpeg','.gif','.svg'))][:200]
+             if len(rec['image_members'])<6:raise ValueError('Missing plates')
+             (root/'GUTENBERG_15491_ILLUSTRATED_ORIGINAL.zip').write_bytes(data);rec['state']='RETAINED_ILLUSTRATED_SOURCE'
+            elif name=='bhl_1665_tab_viii':
+             if not data.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'II*\x00',b'MM\x00*')):raise ValueError('Not admitted binary image')
+             (root/'BHL_1665_TAB_VIII_scan.jpg').write_bytes(data);rec['state']='RETAINED_SCAN'
+            else:
+             d=json.loads(data)
+             rec['identifiers']=[str(d.get('id','')),str(d.get('type',''))]
+             (root/'WELLCOME_1665_CATALOGUE.json').write_bytes(data);rec['state']='RETAINED_METADATA'
+           except Exception as e:rec.update(reason=type(e).__name__+': '+str(e)[:180])
+           out['items'].append(rec)
+          (root/'SOURCE_RETURN.json').write_text(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          
+          PY
+          python -I -B /tmp/ops_micrographia_read.py
+      - name: Return received originals and exact receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ops099-micrographia-source-${{ github.run_id }}
+          path: ${{ runner.temp }}/ops099_micrographia_originals/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Clean owned temporary outputs only
+        if: always()
+        run: |
+          rm -rf -- "${{ runner.temp }}/ops099_micrographia_originals"
+          rm -f -- /tmp/ops_micrographia_read.py
