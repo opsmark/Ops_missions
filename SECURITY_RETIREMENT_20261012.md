@@ -2,9 +2,9 @@
 
 ## Status
 
-`RETIRED_PENDING_MERGE`
+`RETIRED_ON_MAIN_SOURCE_ONLY`
 
-This repository is historical. Its three executable files have been replaced on the retirement branch by fail-closed stubs. Git history preserves the original bytes and provenance.
+This repository is historical. Its three executable files were replaced on the default `main` branch with fail-closed stubs in commit `680be75bf2ceb502d91e9ed9b839cb2836077770`. This is repository-source retirement only, not confirmation that older local copies are stopped. Git history preserves the original bytes and provenance.
 
 ## Why the old implementation is not an approved OPS control route
 
@@ -27,4 +27,4 @@ Do not revive this repository as a scheduler, command queue or general shell. Cu
 
 ## Native follow-up
 
-This source retirement prevents future repository users from launching the historical scripts after merge. It does **not** stop an already-running local copy. Current device/process inspection remains a separate Machine Substrate action and was not claimed here.
+This source retirement prevents use of the historical script bodies when checking out the current `main` versions. Other branches, historical revisions and already-installed copies are separate. It does **not** stop an already-running local copy. Current device/process inspection remains a separate Machine Substrate action and was not claimed here.
